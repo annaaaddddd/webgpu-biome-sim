@@ -1,9 +1,7 @@
-# Deploy the Vite build to GitHub Pages on every push to main
+# Deploy the Vite build to GitHub Pages (manual trigger for now; switch to push on main for release)
 name: Deploy static content to Pages
 
 on:
-  push:
-    branches: ['main']
   workflow_dispatch:
 
 permissions:
