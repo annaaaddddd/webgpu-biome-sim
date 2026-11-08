@@ -1,5 +1,5 @@
 // Shared by every shader. GRID, WORLD_SIZE, HEIGHT_SCALE, SKY and SPECIES_COLORS are
-// injected from core/ecosystem.ts before this file.
+// injected from core/layout.ts before this file.
 
 struct Camera {
   viewProj: mat4x4f,

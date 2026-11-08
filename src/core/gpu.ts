@@ -1,4 +1,5 @@
 import { device, canvas, canvasFormat } from './device';
+import { MSAA_SAMPLES } from './layout';
 
 // Pass a byte size for an empty buffer, or initial data to upload.
 export function createBuffer(usage: GPUBufferUsageFlags, init: number | BufferSource) {
@@ -29,7 +30,7 @@ export function dispatchGrid(encoder: GPUCommandEncoder, pipeline: GPUComputePip
 
 // MSAA color + depth attachments that follow the canvas size.
 export class RenderTargets {
-  sampleCount = 4;
+  sampleCount = MSAA_SAMPLES;
   color!: GPUTextureView;
   depth!: GPUTextureView;
   private textures: GPUTexture[] = [];

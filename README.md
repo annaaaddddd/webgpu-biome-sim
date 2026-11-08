@@ -36,7 +36,7 @@ shaded scene and the height, moisture, slope, species and viability maps.
 
 ## Shared layout
 
-Defined in `src/core/ecosystem.ts` so the three tracks merge cleanly:
+Defined in `src/core/layout.ts` so the three tracks merge cleanly:
 
 - grid 512 x 512 cells over a 100-unit world
 - height and moisture: `r32float` textures, values in [0, 1]

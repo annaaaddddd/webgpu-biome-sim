@@ -15,7 +15,8 @@ import {
   SPECIES_COLORS,
   SKY_COLOR,
   WATER_LEVEL,
-} from '../core/ecosystem';
+  MSAA_SAMPLES,
+} from '../core/layout';
 import { createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
 import { terrainIndices, plantProxyMesh } from './meshes';
 import commonWgsl from '../shaders/common.wgsl?raw';
@@ -63,7 +64,7 @@ function renderPipeline(code: string, buffers: GPUVertexBufferLayout[] = []) {
     fragment: { module, targets: [{ format: canvasFormat }] },
     primitive: { cullMode: 'none' },
     depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
-    multisample: { count: 4 },
+    multisample: { count: MSAA_SAMPLES },
   });
 }
 

@@ -7,6 +7,9 @@ export const HEIGHT_SCALE = 18;
 export const WATER_LEVEL = 0.05;
 export const MAX_SPECIES = 4;
 
+// every render pipeline must match RenderTargets or the merged pass fails
+export const MSAA_SAMPLES = 4;
+
 // height and moisture: one texel per grid cell, values in [0, 1]
 export const TERRAIN_FORMAT: GPUTextureFormat = 'r32float';
 
