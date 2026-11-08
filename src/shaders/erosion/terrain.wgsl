@@ -5,6 +5,7 @@ struct VSOut {
   @builtin(position) position: vec4f,
   @location(0) height: f32,
   @location(1) worldPos: vec3f,
+  @location(2) uv: vec2f,
 }
 // Matches Camera.uniformBuffer layout in core/camera.ts.
 struct Camera { viewProj: mat4x4f, pos: vec3f }
@@ -17,6 +18,7 @@ override WORLD_SIZE: f32 = 100.0;
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var heightTex: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> terrainUniforms: TerrainUniforms;
+@group(0) @binding(3) var moistureTex: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
@@ -34,6 +36,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   out.position = cam.viewProj * vec4f(pos, 1);
   out.height = h;
   out.worldPos = pos;
+  out.uv = uv;
   return out;
 }
 
@@ -46,6 +49,9 @@ fn fs_main(in: VSOut) -> @location(0) vec4f {
   // upward-facing normal.
   let n = normalize(cross(dpdy(in.worldPos), dpdx(in.worldPos)));
   let light = max(dot(n, normalize(vec3f(1.0, 1.0, 0.5))), 0.0) * 0.8 + 0.2;
-  let albedo = mix(vec3f(0.2, 0.5, 0.2), vec3f(1.0), in.height);
+  var albedo = mix(vec3f(0.2, 0.5, 0.2), vec3f(1.0), in.height);
+
+  let m = textureLoad(moistureTex, vec2u(in.uv * f32(GRID - 1)), 0).r;
+  albedo = mix(albedo, vec3f(0.1, 0.3, 0.8), m);
   return vec4f(albedo * light, 1.0);
 }
