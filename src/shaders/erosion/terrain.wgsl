@@ -1,4 +1,4 @@
-// Draws the heightfield as an N x N grid mesh. No vertex buffer: the vertex
+// Draws the heightfield as a GRID x GRID mesh. No vertex buffer: the vertex
 // index picks the grid point and the height comes from heightTex.
 
 struct VSOut {
@@ -10,8 +10,9 @@ struct VSOut {
 struct Camera { viewProj: mat4x4f, pos: vec3f }
 struct TerrainUniforms { heightScale: f32 }
 
-// Grid size, set from TS via pipeline constants.
-override N: u32 = 256;
+// Grid resolution and world extent, set from TS via pipeline constants.
+override GRID: u32 = 512;
+override WORLD_SIZE: f32 = 100.0;
 
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var heightTex: texture_2d<f32>;
@@ -19,13 +20,15 @@ override N: u32 = 256;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
-  // Row-major grid: vi = z * N + x.
-  let x = vi % N;
-  let z = vi / N;
+  // Row-major grid: vi = z * GRID + x.
+  let x = vi % GRID;
+  let z = vi / GRID;
   let h = textureLoad(heightTex, vec2u(x, z), 0).r;
 
-  // Center the grid on the origin, one world unit per texel.
-  let pos = vec3f(f32(x) - f32(N)/2, h * terrainUniforms.heightScale, f32(z) - f32(N)/2);
+  // Texel -> uv in [0, 1] -> world xz in [-WORLD_SIZE/2, WORLD_SIZE/2].
+  let uv = vec2f(f32(x), f32(z)) / f32(GRID - 1);
+  let xz = (uv - 0.5) * WORLD_SIZE;
+  let pos = vec3f(xz.x, h * terrainUniforms.heightScale, xz.y);
 
   var out: VSOut;
   out.position = cam.viewProj * vec4f(pos, 1);
@@ -34,8 +37,15 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
   return out;
 }
 
-// Placeholder shading: green at low height, white at high.
+// Placeholder shading: green at low height, white at high, lit by a fixed
+// directional light. The normal comes from screen-space derivatives of the
+// world position, so no normal map is needed (flat-shaded per triangle).
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4f {
-  return vec4f(mix(vec3f(0.2, 0.5, 0.2), vec3f(1), in.height), 1);
+  // dpdy first: WebGPU's framebuffer y points down, so this order gives an
+  // upward-facing normal.
+  let n = normalize(cross(dpdy(in.worldPos), dpdx(in.worldPos)));
+  let light = max(dot(n, normalize(vec3f(1.0, 1.0, 0.5))), 0.0) * 0.8 + 0.2;
+  let albedo = mix(vec3f(0.2, 0.5, 0.2), vec3f(1.0), in.height);
+  return vec4f(albedo * light, 1.0);
 }

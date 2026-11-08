@@ -3,7 +3,6 @@
 // Must match the Float32Array in ErosionTrack.generateHeightfield().
 struct Params {
   frequency: f32,
-  amplitude: f32,
   octaves: f32,
   seed: f32,
 }
@@ -31,16 +30,19 @@ fn valueNoise(p: vec2f) -> f32 {
 }
 
 // Sum of octaves: each one doubles frequency and halves amplitude.
+// Divided by the total amplitude so the result stays in [0, 1].
 fn fbm(p: vec2f) -> f32 {
   var value = 0.0;
-  var amplitude = params.amplitude;
+  var totalAmp = 0.0;
+  var amplitude = 1.0;
   var frequency = params.frequency;
   for (var i = 0; i < i32(params.octaves); i++) {
     value += amplitude * valueNoise(p * frequency);
+    totalAmp += amplitude;
     frequency *= 2;
     amplitude *= 0.5;
   }
-  return value;
+  return value / totalAmp;
 }
 
 @compute @workgroup_size(8, 8)

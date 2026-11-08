@@ -5,15 +5,19 @@ import { camera } from '../core/camera';
 import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
 
-// Heightfield resolution (N x N texels, one mesh vertex per texel).
-const N = 256;
+// Shared layout: one texel per grid cell, world is WORLD_SIZE units across.
+// TODO: import from core/layout.ts once the ecosystem PR is merged.
+const GRID = 512;
+const WORLD_SIZE = 100;
 // Two triangles per grid cell.
-const indexCount = (N - 1) * (N - 1) * 6;
+const indexCount = (GRID - 1) * (GRID - 1) * 6;
 
 // Erosion track: generate an fBm heightfield on the GPU, render it as a mesh.
 export class ErosionTrack implements Track {
   // --- GPU resources ---
+  // Both r32float in [0, 1]; these are what the ecosystem track reads.
   heightTex!: GPUTexture;
+  moistureTex!: GPUTexture;
   heightfieldUniforms!: GPUBuffer;
   heightfieldPipeline!: GPUComputePipeline;
   heightfieldBindGroup!: GPUBindGroup;
@@ -26,26 +30,27 @@ export class ErosionTrack implements Track {
 
   // --- GUI params ---
   frequency = 4;
-  amplitude = 1;
   octaves = 5;
   seed = 0;
-  heightScale = 40;
+  heightScale = 18;
 
   init(gui: GUI) {
 
-    // Pull the camera back so the whole 256-unit grid is in view.
-    camera.distance = 300;
-    camera.target[1] = 20;
+    // Pull the camera back so the whole grid is in view.
+    camera.distance = 150;
+    camera.target[1] = 8;
 
     // --- Heightfield compute ---
-    // r32float: written by the compute pass, read by the terrain vertex shader.
-    this.heightTex = device.createTexture({
-      size: [N, N],
+    // Written by compute passes, read by the terrain shaders.
+    const terrainTexDesc: GPUTextureDescriptor = {
+      size: [GRID, GRID],
       format: 'r32float',
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-    });
+    };
+    this.heightTex = device.createTexture(terrainTexDesc);
+    this.moistureTex = device.createTexture(terrainTexDesc); // filled by the erosion passes later
 
-    // Params: 4 f32 = 16 bytes (frequency, amplitude, octaves, seed).
+    // Params: 3 f32 (frequency, octaves, seed), padded to 16 bytes.
     this.heightfieldUniforms = device.createBuffer({
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -83,15 +88,15 @@ export class ErosionTrack implements Track {
       usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     });
 
-    // Grid indices. Vertex i = z * N + x; each cell is split into two
-    // triangles: (i, i+1, i+N) and (i+1, i+N+1, i+N).
+    // Grid indices. Vertex i = z * GRID + x; each cell is split into two
+    // triangles: (i, i+1, i+GRID) and (i+1, i+GRID+1, i+GRID).
     const indices = new Uint32Array(indexCount);
     let k = 0;
-    for (let z = 0; z < N - 1; z++) {
-      for (let x = 0; x < N - 1; x++) {
-        const i = z * N + x;
-        indices[k++] = i;      indices[k++] = i + 1;     indices[k++] = i + N;
-        indices[k++] = i + 1;  indices[k++] = i + N + 1; indices[k++] = i + N;
+    for (let z = 0; z < GRID - 1; z++) {
+      for (let x = 0; x < GRID - 1; x++) {
+        const i = z * GRID + x;
+        indices[k++] = i;      indices[k++] = i + 1;        indices[k++] = i + GRID;
+        indices[k++] = i + 1;  indices[k++] = i + GRID + 1; indices[k++] = i + GRID;
       }
     }
     device.queue.writeBuffer(this.indexBuffer, 0, indices);
@@ -99,7 +104,7 @@ export class ErosionTrack implements Track {
     const module = device.createShaderModule({ code: terrainSrc });
     this.terrainPipeline = device.createRenderPipeline({
       layout: 'auto',
-      vertex: { module, entryPoint: 'vs_main', constants: { N } }, // sets `override N`
+      vertex: { module, entryPoint: 'vs_main', constants: { GRID, WORLD_SIZE } }, // sets the `override`s
       fragment: { module, entryPoint: 'fs_main', targets: [{ format: canvasFormat }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: {
@@ -123,10 +128,9 @@ export class ErosionTrack implements Track {
     // Noise params need a re-run of the compute pass; heightScale is read every frame.
     const regen = () => this.generateHeightfield();
     gui.add(this, 'frequency', 0.5, 16).onChange(regen);
-    gui.add(this, 'amplitude', 0.5, 3).onChange(regen);
     gui.add(this, 'octaves', 1, 8).step(1).onChange(regen);
     gui.add(this, 'seed').onChange(regen);
-    gui.add(this, 'heightScale', 1, 100);
+    gui.add(this, 'heightScale', 1, 50);
 
     this.generateHeightfield();
 
@@ -136,7 +140,6 @@ export class ErosionTrack implements Track {
   generateHeightfield() {
     const params = new Float32Array([
       this.frequency,
-      this.amplitude,
       this.octaves,
       this.seed,
     ]);
@@ -148,8 +151,8 @@ export class ErosionTrack implements Track {
     pass.setBindGroup(0, this.heightfieldBindGroup);
     // One thread per texel, 8x8 workgroups (matches @workgroup_size).
     pass.dispatchWorkgroups(
-      Math.ceil(N / 8),
-      Math.ceil(N / 8),
+      Math.ceil(GRID / 8),
+      Math.ceil(GRID / 8),
     );
     pass.end();
     device.queue.submit([encoder.finish()]);
