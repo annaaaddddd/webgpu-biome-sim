@@ -8,7 +8,7 @@ struct Params {
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var heightTex: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var stateOut: texture_storage_2d<rgba32float, write>;
 
 // Cheap 2D -> [0,1) hash. Seed shifts the input so each seed gives a new map.
 fn hash(p: vec2f) -> f32 {
@@ -47,11 +47,11 @@ fn fbm(p: vec2f) -> f32 {
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
-  let dims = textureDimensions(heightTex);
+  let dims = textureDimensions(stateOut);
   if (id.x >= dims.x || id.y >= dims.y) { return; }
 
   // Texel -> uv in [0,1), then sample fBm and store in the red channel.
   let uv = vec2<f32>(id.xy) / vec2f(dims);
   let h = fbm(uv);
-  textureStore(heightTex, id.xy, vec4f(h, 0, 0, 0));
+  textureStore(stateOut, id.xy, vec4f(h, 0, 0, 0));
 }

@@ -2,8 +2,10 @@ import type { GUI } from 'lil-gui';
 import type { Track } from '../core/track';
 import { device, context, canvas, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
+
 import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
+import exportSrc from '../shaders/erosion/export.wgsl?raw'
 
 // Shared layout: one texel per grid cell, world is WORLD_SIZE units across.
 // TODO: import from core/layout.ts once the ecosystem PR is merged.
@@ -23,10 +25,18 @@ export class ErosionTrack implements Track {
   heightfieldBindGroup!: GPUBindGroup;
 
   indexBuffer!: GPUBuffer;
-  depthTex!: GPUTexture;
+  depthTex?: GPUTexture; // created on the first frame()
   terrainUniforms!: GPUBuffer;
   terrainPipeline!: GPURenderPipeline;
   terrainBindGroup!: GPUBindGroup;
+
+  stateTex!: GPUTexture[];   // b: height, d: water depth, s: sediment
+  fluxTex!: GPUTexture[];    // flux to 4 directions: left, right, top, bottom
+  velocityTex!: GPUTexture;  // velocity (u, v)
+  cur = 0;
+
+  exportPipeline!: GPUComputePipeline;
+  exportBindGroups!: GPUBindGroup[];
 
   // --- GUI params ---
   frequency = 4;
@@ -35,46 +45,40 @@ export class ErosionTrack implements Track {
   heightScale = 18;
 
   init(gui: GUI) {
-
     // Pull the camera back so the whole grid is in view.
     camera.distance = 150;
     camera.target[1] = 8;
 
-    // --- Heightfield compute ---
-    // Written by compute passes, read by the terrain shaders.
+    // --- Textures ---
+    // Simulation state, ping-ponged between [0] and [1] (see `cur`).
+    const stateAndFluxTexDesc: GPUTextureDescriptor = {
+      size: [GRID, GRID],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    };
+    this.stateTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
+    this.fluxTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
+
+    this.velocityTex = device.createTexture({
+      size: [GRID, GRID],
+      format: 'rg32float',
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+
+    // Outputs: written by the export pass, read by the terrain shaders.
     const terrainTexDesc: GPUTextureDescriptor = {
       size: [GRID, GRID],
       format: 'r32float',
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     };
     this.heightTex = device.createTexture(terrainTexDesc);
-    this.moistureTex = device.createTexture(terrainTexDesc); // filled by the erosion passes later
+    this.moistureTex = device.createTexture(terrainTexDesc);
 
+    // --- Buffers ---
     // Params: 3 f32 (frequency, octaves, seed), padded to 16 bytes.
     this.heightfieldUniforms = device.createBuffer({
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    this.heightfieldPipeline = device.createComputePipeline({
-      layout: 'auto', // infer the bind group layout from the shader
-      compute: { module: device.createShaderModule({ code: heightfieldSrc }), entryPoint: 'main' },
-    });
-
-    this.heightfieldBindGroup = device.createBindGroup({
-      layout: this.heightfieldPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.heightfieldUniforms } },
-        { binding: 1, resource: this.heightTex.createView() },
-      ],
-    });
-
-    // --- Terrain render ---
-    // Recreated in frame() when the canvas size changes.
-    this.depthTex = device.createTexture({
-      size: [canvas.width, canvas.height],
-      format: 'depth24plus',
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
     // Only heightScale (4 bytes) is used; uniform buffers are padded to 16.
@@ -101,6 +105,18 @@ export class ErosionTrack implements Track {
     }
     device.queue.writeBuffer(this.indexBuffer, 0, indices);
 
+    // --- Pipelines ---
+    // layout: 'auto' infers the bind group layout from the shader.
+    this.heightfieldPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: device.createShaderModule({ code: heightfieldSrc }), entryPoint: 'main' },
+    });
+
+    this.exportPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: device.createShaderModule({ code: exportSrc }), entryPoint: 'main' },
+    });
+
     const module = device.createShaderModule({ code: terrainSrc });
     this.terrainPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -114,6 +130,25 @@ export class ErosionTrack implements Track {
       },
     });
 
+    // --- Bind groups ---
+    this.heightfieldBindGroup = device.createBindGroup({
+      layout: this.heightfieldPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.heightfieldUniforms } },
+        { binding: 1, resource: this.stateTex[this.cur].createView() },
+      ],
+    });
+
+    // One per ping-pong side; frame() picks exportBindGroups[cur].
+    this.exportBindGroups = [0, 1].map((i) => device.createBindGroup({
+      layout: this.exportPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.stateTex[i].createView() },
+        { binding: 1, resource: this.heightTex.createView() },
+        { binding: 2, resource: this.moistureTex.createView() },
+      ],
+    }));
+
     this.terrainBindGroup = device.createBindGroup({
       layout: this.terrainPipeline.getBindGroupLayout(0),
       entries: [
@@ -123,7 +158,6 @@ export class ErosionTrack implements Track {
       ],
     });
 
-
     // --- GUI ---
     // Noise params need a re-run of the compute pass; heightScale is read every frame.
     const regen = () => this.generateHeightfield();
@@ -132,8 +166,8 @@ export class ErosionTrack implements Track {
     gui.add(this, 'seed').onChange(regen);
     gui.add(this, 'heightScale', 1, 50);
 
+    // --- Initial state ---
     this.generateHeightfield();
-
   }
 
   // Upload params and run the heightfield compute pass once (not per frame).
@@ -158,6 +192,17 @@ export class ErosionTrack implements Track {
     device.queue.submit([encoder.finish()]);
   }
 
+  export(encoder: GPUCommandEncoder){
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(this.exportPipeline);
+    pass.setBindGroup(0, this.exportBindGroups[this.cur]);
+    pass.dispatchWorkgroups(
+      Math.ceil(GRID / 8),
+      Math.ceil(GRID / 8),
+    );
+    pass.end();
+  }
+
   frame(encoder: GPUCommandEncoder, _dt: number) {
     // Depth texture must match the canvas size; rebuild it after a resize.
     if (!this.depthTex || this.depthTex.width !== canvas.width || this.depthTex.height !== canvas.height) {
@@ -169,6 +214,9 @@ export class ErosionTrack implements Track {
       });
     }
     device.queue.writeBuffer(this.terrainUniforms, 0, new Float32Array([this.heightScale]));
+
+    this.export(encoder);
+
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: context.getCurrentTexture().createView(),
