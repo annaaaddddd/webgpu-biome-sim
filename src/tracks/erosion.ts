@@ -46,6 +46,8 @@ export class ErosionTrack implements Track {
   rainBindGroups!: GPUBindGroup[];
   fluxPipeline!: GPUComputePipeline;
   fluxBindGroups!: GPUBindGroup[];
+  waterPipeline!: GPUComputePipeline;
+  waterBindGroups!: GPUBindGroup[];
 
   // --- GUI params ---
   frequency = 4;
@@ -58,7 +60,7 @@ export class ErosionTrack implements Track {
     dt: 0.05,        // simulation step, not frame time
     rainRate: 0.01,
     stepsPerFrame: 1,
-    moistureScale: 10.0,
+    moistureScale: 2.0,
     pipeCoeff: 1.0,
     cellSize,
   };
@@ -166,13 +168,19 @@ export class ErosionTrack implements Track {
       compute: { module: erosionModule, entryPoint: 'flux' },
     }); 
 
+    this.waterPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: erosionModule, entryPoint: 'water' },
+    }); 
+
     // --- Bind groups ---
     this.heightfieldBindGroup = device.createBindGroup({
       layout: this.heightfieldPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.heightfieldUniforms } },
         { binding: 1, resource: this.stateTex[this.stateCur].createView() },
-        { binding: 2, resource: this.fluxTex[this.fluxCur].createView() }
+        { binding: 2, resource: this.fluxTex[this.fluxCur].createView() },
+        { binding: 3, resource: this.velocityTex.createView() },
       ],
     });
 
@@ -211,6 +219,14 @@ export class ErosionTrack implements Track {
       { binding: 1, resource: this.stateTex[s].createView() },
       { binding: 3, resource: this.fluxTex[f].createView() },
       { binding: 4, resource: this.fluxTex[1-f].createView() },
+    ]);
+
+    this.waterBindGroups = this.bindGroups4(this.waterPipeline, (s, f) => [
+      { binding: 0, resource: {buffer: this.simUniforms } },
+      { binding: 1, resource: this.stateTex[s].createView() },
+      { binding: 2, resource: this.stateTex[1-s].createView() },
+      { binding: 3, resource: this.fluxTex[f].createView() },
+      { binding: 5, resource: this.velocityTex.createView() },
     ]);
 
     // --- GUI ---
@@ -288,7 +304,7 @@ export class ErosionTrack implements Track {
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {
       this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state');
       this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux');
-      // this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state');
+      this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state');
     }
     this.export(encoder);
 
