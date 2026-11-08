@@ -14,6 +14,7 @@ const GRID = 512;
 const WORLD_SIZE = 100;
 // Two triangles per grid cell.
 const indexCount = (GRID - 1) * (GRID - 1) * 6;
+const cellSize = WORLD_SIZE / GRID;
 
 // Erosion track: generate an fBm heightfield on the GPU, render it as a mesh.
 export class ErosionTrack implements Track {
@@ -34,7 +35,8 @@ export class ErosionTrack implements Track {
   stateTex!: GPUTexture[];   // b: height, d: water depth, s: sediment
   fluxTex!: GPUTexture[];    // flux to 4 directions: left, right, top, bottom
   velocityTex!: GPUTexture;  // velocity (u, v)
-  cur = 0;
+  stateCur = 0;
+  fluxCur = 0;
 
   exportPipeline!: GPUComputePipeline;
   exportBindGroups!: GPUBindGroup[];
@@ -42,6 +44,8 @@ export class ErosionTrack implements Track {
   simUniforms!: GPUBuffer;
   rainPipeline!: GPUComputePipeline;
   rainBindGroups!: GPUBindGroup[];
+  fluxPipeline!: GPUComputePipeline;
+  fluxBindGroups!: GPUBindGroup[];
 
   // --- GUI params ---
   frequency = 4;
@@ -52,9 +56,11 @@ export class ErosionTrack implements Track {
   // Simulation params. Uploaded every frame; field order must match `struct SimParams` in erosion.wgsl.
   sim = {
     dt: 0.05,        // simulation step, not frame time
-    rainRate: 0.5,
+    rainRate: 0.01,
     stepsPerFrame: 1,
     moistureScale: 10.0,
+    pipeCoeff: 1.0,
+    cellSize,
   };
 
   init(gui: GUI) {
@@ -120,7 +126,7 @@ export class ErosionTrack implements Track {
 
     // SimParams struct; grow the size as fields are added (16-byte multiples).
     this.simUniforms = device.createBuffer({
-      size: 16,
+      size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -149,17 +155,24 @@ export class ErosionTrack implements Track {
       },
     });
 
+    const erosionModule = device.createShaderModule({ code: erosionPassesSrc });
     this.rainPipeline = device.createComputePipeline({
       layout: 'auto',
-      compute: { module: device.createShaderModule({ code: erosionPassesSrc }), entryPoint: 'rain' },
+      compute: { module: erosionModule, entryPoint: 'rain' },
     });
+
+    this.fluxPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: erosionModule, entryPoint: 'flux' },
+    }); 
 
     // --- Bind groups ---
     this.heightfieldBindGroup = device.createBindGroup({
       layout: this.heightfieldPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.heightfieldUniforms } },
-        { binding: 1, resource: this.stateTex[this.cur].createView() },
+        { binding: 1, resource: this.stateTex[this.stateCur].createView() },
+        { binding: 2, resource: this.fluxTex[this.fluxCur].createView() }
       ],
     });
 
@@ -193,6 +206,13 @@ export class ErosionTrack implements Track {
       ],
     }));
 
+    this.fluxBindGroups = this.bindGroups4(this.fluxPipeline, (s, f) => [
+      { binding: 0, resource: {buffer: this.simUniforms } },
+      { binding: 1, resource: this.stateTex[s].createView() },
+      { binding: 3, resource: this.fluxTex[f].createView() },
+      { binding: 4, resource: this.fluxTex[1-f].createView() },
+    ]);
+
     // --- GUI ---
     // Noise params need a re-run of the compute pass; heightScale is read every frame.
     const regen = () => this.generateHeightfield();
@@ -205,9 +225,17 @@ export class ErosionTrack implements Track {
     simFolder.add(this.sim, 'dt', 0.001, 0.2);
     simFolder.add(this.sim, 'rainRate', 0, 2);
     simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
+    simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
 
     // --- Initial state ---
     this.generateHeightfield();
+  }
+
+  bindGroups4(pipeline: GPUComputePipeline, entries: (s: number, f: number) => GPUBindGroupEntry[]) {
+    return [0, 1, 2, 3].map((k) => device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: entries(k >> 1, k & 1),
+    }));
   }
 
   // One full-grid compute pass: one thread per texel, 8x8 workgroups
@@ -221,15 +249,18 @@ export class ErosionTrack implements Track {
   }
 
   // A simulation pass: reads side `cur`, writes the other side, then flips.
-  step(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroups: GPUBindGroup[]) {
-    this.dispatch(encoder, pipeline, bindGroups[this.cur]);
-    this.cur = 1 - this.cur;
+  step(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, which: 'state' | 'flux') {
+    this.dispatch(encoder, pipeline, bindGroup);
+
+    if (which === 'state') this.stateCur = 1 - this.stateCur;
+    else this.fluxCur = 1 - this.fluxCur;
   }
 
   // Upload noise params and regenerate the heightfield into side 0.
   // Resets the ping-pong so the simulation restarts from this terrain.
   generateHeightfield() {
-    this.cur = 0;
+    this.stateCur = 0;
+    this.fluxCur = 0;
     device.queue.writeBuffer(this.heightfieldUniforms, 0, new Float32Array([this.frequency, this.octaves, this.seed]));
     const encoder = device.createCommandEncoder();
     this.dispatch(encoder, this.heightfieldPipeline, this.heightfieldBindGroup);
@@ -238,7 +269,7 @@ export class ErosionTrack implements Track {
 
   // Copy the current state into the height/moisture textures. Reads only, no flip.
   export(encoder: GPUCommandEncoder) {
-    this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.cur]);
+    this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.stateCur]);
   }
 
   frame(encoder: GPUCommandEncoder, _dt: number) {
@@ -252,10 +283,12 @@ export class ErosionTrack implements Track {
       });
     }
     device.queue.writeBuffer(this.terrainUniforms, 0, new Float32Array([this.heightScale]));
-    device.queue.writeBuffer(this.simUniforms, 0, new Float32Array([this.sim.dt, this.sim.rainRate, this.sim.moistureScale]));
+    device.queue.writeBuffer(this.simUniforms, 0, new Float32Array([this.sim.dt, this.sim.rainRate, this.sim.moistureScale, this.sim.pipeCoeff, cellSize]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {
-        this.step(encoder, this.rainPipeline, this.rainBindGroups);
+      this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state');
+      this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux');
+      // this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state');
     }
     this.export(encoder);
 

@@ -9,6 +9,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var stateOut: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var fluxOut: texture_storage_2d<rgba32float, write>;
 
 // Cheap 2D -> [0,1) hash. Seed shifts the input so each seed gives a new map.
 fn hash(p: vec2f) -> f32 {
@@ -54,4 +55,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let uv = vec2<f32>(id.xy) / vec2f(dims);
   let h = fbm(uv);
   textureStore(stateOut, id.xy, vec4f(h, 0, 0, 0));
+  textureStore(fluxOut, id.xy, vec4f(0));
 }
