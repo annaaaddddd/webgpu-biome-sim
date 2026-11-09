@@ -128,15 +128,18 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
   let dBar = (me.g + d2) / 2;
   var u = 0.0;
   var v = 0.0;
+  if (dBar > 1e-3) {
+    u = (in_L - f.r + f.g - in_R) / 2 / (sim.cellSize * dBar);
+    v = (in_D - f.b + f.a - in_U) / 2 / (sim.cellSize * dBar);
+  }
+
+  // CFL clamp: water may cross at most one cell per step. Shallow cells
+  // otherwise produce huge velocities (u ~ 1/dBar).
   let maxSpeed = sim.cellSize / sim.dt;
   let speed = length(vec2f(u, v));
   if (speed > maxSpeed) {
     u *= maxSpeed / speed;
     v *= maxSpeed / speed;
-  }
-  if (dBar > 1e-3) {
-    u = (in_L - f.r + f.g - in_R) / 2 / (sim.cellSize * dBar);
-    v = (in_D - f.b + f.a - in_U) / 2 / (sim.cellSize * dBar);
   }
 
   textureStore(stateOut, p, vec4f(me.r, d2, me.b, 0));

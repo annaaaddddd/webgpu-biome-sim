@@ -62,7 +62,7 @@ The fix has two parts:
 | --- | --- | --- |
 | ![](media/erosion/erosion_m1_shaded_closeup.png) | ![](media/erosion/erosion_m1_height_view.png) | ![](media/erosion/erosion_m1_moisture_view.png) |
 
-*All captures: default parameters in `erosion.ts` (512 x 512 grid, dt 0.05, 1 step/frame at ~60 fps; rain 0.02, pipe 1.0, Kc 0.05, Ks 0.3, Kd 0.5, Ke 0.5, Kt 0.5, talus 0.01, maxDepth 0.01). The moisture view uses moistureScale 25 instead of the default 2.*
+*All captures: 512 x 512 grid, dt 0.05, 1 step/frame at ~60 fps; rain 0.02, pipe 1.0, Kc 0.05, Ks 0.3, Kd 0.5, Ke 0.5, Kt 0.5, talus 0.01, maxDepth 0.01. The moisture view uses moistureScale 25 instead of the default 2. Taken before the velocity clamp fix; with the clamp active the same look needs Kc 0.01, which is now the default.*
 
 ### Ecosystem track
 

@@ -2,16 +2,13 @@ import type { GUI } from 'lil-gui';
 import type { Track } from '../core/track';
 import { device, context, canvas, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
+import { GRID, WORLD_SIZE, HEIGHT_SCALE } from '../core/layout';
 
 import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
 import exportSrc from '../shaders/erosion/export.wgsl?raw';
 import erosionPassesSrc from '../shaders/erosion/erosion.wgsl?raw';
 
-// Shared layout: one texel per grid cell, world is WORLD_SIZE units across.
-// TODO: import from core/layout.ts once the ecosystem PR is merged.
-const GRID = 512;
-const WORLD_SIZE = 100;
 // Two triangles per grid cell.
 const indexCount = (GRID - 1) * (GRID - 1) * 6;
 const cellSize = WORLD_SIZE / GRID;
@@ -59,7 +56,7 @@ export class ErosionTrack implements Track {
   frequency = 4;
   octaves = 5;
   seed = 0;
-  heightScale = 18;
+  heightScale = HEIGHT_SCALE;
   view = 0; // 0 shaded, 1 height, 2 moisture (see fs_main in terrain.wgsl)
 
   // Simulation params. Uploaded every frame; field order must match `struct SimParams` in erosion.wgsl.
@@ -70,7 +67,7 @@ export class ErosionTrack implements Track {
     moistureScale: 2.0,
     pipeCoeff: 1.0,
     cellSize,
-    Kc: 0.05,
+    Kc: 0.01,
     Ks: 0.3,
     Kd: 0.5,
     Ke: 0.5,
