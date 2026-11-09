@@ -60,6 +60,7 @@ export class ErosionTrack implements Track {
   octaves = 5;
   seed = 0;
   heightScale = 18;
+  view = 0; // 0 shaded, 1 height, 2 moisture (see fs_main in terrain.wgsl)
 
   // Simulation params. Uploaded every frame; field order must match `struct SimParams` in erosion.wgsl.
   sim = {
@@ -76,7 +77,7 @@ export class ErosionTrack implements Track {
     minSlope: 0.05,
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
     Kt: 0.5,
-    talus: 0.01,     // height units; heights are in [0,1], so 0.01 ≈ 43° at 18x height scale
+    talus: 0.01,     // height units; heights are in [0,1], so 0.01 is about 43 deg at 18x height scale
   };
 
   init(gui: GUI) {
@@ -294,9 +295,11 @@ export class ErosionTrack implements Track {
     gui.add(this, 'octaves', 1, 8).step(1).onChange(regen);
     gui.add(this, 'seed').onChange(regen);
     gui.add(this, 'heightScale', 1, 50);
+    gui.add(this, 'view', { shaded: 0, height: 1, moisture: 2 });
 
     const simFolder = gui.addFolder('Simulation');
     simFolder.add(this.sim, 'dt', 0.001, 0.2);
+    simFolder.add(this.sim, 'moistureScale', 1, 50);
     simFolder.add(this.sim, 'rainRate', 0, 2);
     simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
     simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
@@ -364,7 +367,7 @@ export class ErosionTrack implements Track {
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
     }
-    device.queue.writeBuffer(this.terrainUniforms, 0, new Float32Array([this.heightScale]));
+    device.queue.writeBuffer(this.terrainUniforms, 0, new Float32Array([this.heightScale, this.view]));
     device.queue.writeBuffer(this.simUniforms, 0, new Float32Array([
       this.sim.dt, 
       this.sim.rainRate, 

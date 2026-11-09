@@ -170,7 +170,7 @@ fn erodeDeposit(@builtin(global_invocation_id) id: vec3u) {
   sinAlpha = max(sinAlpha, sim.minSlope);
 
   // Shallow water carries little: fade capacity in over the first `maxDepth`
-  // of water so a thin film of rain can't carve pillars (Jákó & Tóth 2011).
+  // of water so a thin film of rain can't carve pillars (Jako & Toth 2011).
   let depthFactor = clamp(me.g / sim.maxDepth, 0.0, 1.0);
   let c = sim.Kc * sinAlpha * speed * depthFactor;
 
