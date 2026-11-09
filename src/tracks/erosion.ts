@@ -75,6 +75,7 @@ export class ErosionTrack implements Track {
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
     Kt: 0.5,
     talus: 0.01,     // height units; heights are in [0,1], so 0.01 is about 43 deg at 18x height scale
+    moistureTau: 2.0, // sim seconds for moisture to catch up with water depth
   };
 
   init(gui: GUI) {
@@ -208,6 +209,7 @@ export class ErosionTrack implements Track {
         { binding: 1, resource: this.stateTex[this.stateCur].createView() },
         { binding: 2, resource: this.fluxTex[this.fluxCur].createView() },
         { binding: 3, resource: this.velocityTex.createView() },
+        { binding: 4, resource: this.moistureTex.createView() },
       ],
     });
 
@@ -297,6 +299,7 @@ export class ErosionTrack implements Track {
     const simFolder = gui.addFolder('Simulation');
     simFolder.add(this.sim, 'dt', 0.001, 0.2);
     simFolder.add(this.sim, 'moistureScale', 1, 50);
+    simFolder.add(this.sim, 'moistureTau', 0.1, 20);
     simFolder.add(this.sim, 'rainRate', 0, 2);
     simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
     simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
@@ -379,6 +382,7 @@ export class ErosionTrack implements Track {
       this.sim.minSlope,
       this.sim.maxDepth,
       this.sim.talus,
+      this.sim.moistureTau,
     ]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {

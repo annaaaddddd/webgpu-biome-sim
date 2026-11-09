@@ -11,6 +11,7 @@ struct Params {
 @group(0) @binding(1) var stateOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var fluxOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var velocityOut: texture_storage_2d<rg32float, write>;
+@group(0) @binding(4) var moistureOut: texture_storage_2d<r32float, write>;
 
 // Cheap 2D -> [0,1) hash. Seed shifts the input so each seed gives a new map.
 fn hash(p: vec2f) -> f32 {
@@ -59,4 +60,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   textureStore(stateOut, id.xy, vec4f(h, 0, 0, 0));
   textureStore(fluxOut, id.xy, vec4f(0));
   textureStore(velocityOut, id.xy, vec4f(0));
+  // Moisture accumulates over time; a new map starts dry.
+  textureStore(moistureOut, id.xy, vec4f(0));
 }
