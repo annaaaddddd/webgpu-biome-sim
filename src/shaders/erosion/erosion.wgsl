@@ -9,7 +9,9 @@ struct SimParams {
   Kc: f32,
   Ks: f32,
   Kd: f32,
+  Ke: f32,
   minSlope: f32,
+  maxDepth: f32,
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
@@ -124,7 +126,13 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
   let dBar = (me.g + d2) / 2;
   var u = 0.0;
   var v = 0.0;
-  if (dBar > 1e-4) {
+  let maxSpeed = sim.cellSize / sim.dt;
+  let speed = length(vec2f(u, v));
+  if (speed > maxSpeed) {
+    u *= maxSpeed / speed;
+    v *= maxSpeed / speed;
+  }
+  if (dBar > 1e-3) {
     u = (in_L - f.r + f.g - in_R) / 2 / (sim.cellSize * dBar);
     v = (in_D - f.b + f.a - in_U) / 2 / (sim.cellSize * dBar);
   }
@@ -159,22 +167,52 @@ fn erodeDeposit(@builtin(global_invocation_id) id: vec3u) {
   var sinAlpha = length(grad) / sqrt(1 + dot(grad, grad));
   sinAlpha = max(sinAlpha, sim.minSlope);
 
-  let c = sim.Kc * sinAlpha * speed;
+  // Shallow water carries little: fade capacity in over the first `maxDepth`
+  // of water so a thin film of rain can't carve pillars (Jákó & Tóth 2011).
+  let depthFactor = clamp(me.g / sim.maxDepth, 0.0, 1.0);
+  let c = sim.Kc * sinAlpha * speed * depthFactor;
 
   var b = me.r;
   var s = me.b;
   var delta = 0.0;
   if (c > s) {
-    delta = sim.Ks * (c - s);
+    delta = sim.Ks * (c - s) * sim.dt;
+    delta = min(delta, b);
     b -= delta;
     s += delta;
   }
   else {
-    delta = sim.Kd * (s - c);
+    delta = sim.Kd * (s - c) * sim.dt;
     b += delta;
     s -= delta;
   }
   b = max(b, 0);
 
   textureStore(stateOut, p, vec4f(b, me.g, s, 0));
+}
+
+@compute @workgroup_size(8, 8)
+fn transport(@builtin(global_invocation_id) id: vec3u) {
+  let dims = vec2i(textureDimensions(stateIn));
+  let p = vec2i(id.xy);
+  if (any(p >= dims)) { return; }
+
+  let me = textureLoad(stateIn, p, 0);
+  let vel = textureLoad(velocityIn, p, 0).xy;
+
+  var src = vec2f(p) - vel * sim.dt / sim.cellSize;
+  src = clamp(src, vec2f(0), vec2f(dims - 1));
+
+  let i0 = vec2i(floor(src));
+  let i1 = min(i0 + 1, dims - 1);
+  let f = fract(src);
+  let s00 = textureLoad(stateIn, i0, 0).b;
+  let s10 = textureLoad(stateIn, vec2i(i1.x, i0.y), 0).b;
+  let s01 = textureLoad(stateIn, vec2i(i0.x, i1.y), 0).b;
+  let s11 = textureLoad(stateIn, i1, 0).b;
+  let s = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+
+  let d = me.g * (1 - sim.Ke * sim.dt);
+
+  textureStore(stateOut, p, vec4f(me.r, d, s, 0));
 }
