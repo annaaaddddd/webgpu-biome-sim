@@ -14,6 +14,7 @@ export async function initWebGPU(canvasId = 'mainCanvas') {
   }
 
   device = await adapter.requestDevice();
+  device.addEventListener('uncapturederror', (e) => console.error(e.error.message));
   device.lost.then((info) => {
     console.error(`WebGPU device lost: ${info.message}`);
   });

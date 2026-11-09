@@ -6,11 +6,13 @@ import { initCamera, camera } from './core/camera';
 import type { Track } from './core/track';
 import { ClearTrack } from './tracks/clear';
 import { ErosionTrack } from './tracks/erosion';
+import { EcosystemTrack } from './tracks/ecosystem';
 
 // Pick a track with ?track=<name>. Each M1 track registers itself here.
 const tracks: Record<string, () => Track> = {
   clear: () => new ClearTrack(),
   erosion: () => new ErosionTrack(),
+  ecosystem: () => new EcosystemTrack(),
 };
 
 await initWebGPU();
