@@ -10,8 +10,10 @@ struct SimParams {
   Ks: f32,
   Kd: f32,
   Ke: f32,
+  Kt: f32,
   minSlope: f32,
   maxDepth: f32,
+  talus: f32,       // max height difference (in height units) between neighbors before material slides
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
@@ -215,4 +217,44 @@ fn transport(@builtin(global_invocation_id) id: vec3u) {
   let d = me.g * (1 - sim.Ke * sim.dt);
 
   textureStore(stateOut, p, vec4f(me.r, d, s, 0));
+}
+
+@compute @workgroup_size(8, 8)
+fn thermal(@builtin(global_invocation_id) id: vec3u) {
+  let dims = vec2i(textureDimensions(stateIn));
+  let p = vec2i(id.xy);
+  if (any(p >= dims)) { return; }
+
+  let me = textureLoad(stateIn, p, 0);
+  var b = me.r;
+  let talus = sim.talus;
+
+  // Symmetric talus transfer: for each neighbor pair, the higher cell loses
+  // half the excess and the lower cell gains it. The neighbor computes the
+  // same pair with the opposite sign, so material is conserved in one pass.
+  // Past the boundary there is no neighbor, so nothing moves that way.
+  var dTotal = 0.0;
+  if (p.x > 0) {
+    let diff = b - textureLoad(stateIn, p + vec2i(-1, 0), 0).r;
+    let excess = abs(diff) - talus;
+    if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+  }
+  if (p.x < dims.x - 1) {
+    let diff = b - textureLoad(stateIn, p + vec2i(1, 0), 0).r;
+    let excess = abs(diff) - talus;
+    if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+  }
+  if (p.y > 0) {
+    let diff = b - textureLoad(stateIn, p + vec2i(0, -1), 0).r;
+    let excess = abs(diff) - talus;
+    if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+  }
+  if (p.y < dims.y - 1) {
+    let diff = b - textureLoad(stateIn, p + vec2i(0, 1), 0).r;
+    let excess = abs(diff) - talus;
+    if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+  }
+
+  b = max(b + dTotal, 0.0);
+  textureStore(stateOut, p, vec4f(b, me.g, me.b, 0));
 }

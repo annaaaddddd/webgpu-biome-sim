@@ -52,6 +52,8 @@ export class ErosionTrack implements Track {
   erodeDepositBindGroups!: GPUBindGroup[];
   transportPipeline!: GPUComputePipeline;
   transportBindGroups!: GPUBindGroup[];
+  thermalPipeline!: GPUComputePipeline;
+  thermalBindGroups!: GPUBindGroup[];
 
   // --- GUI params ---
   frequency = 4;
@@ -67,12 +69,14 @@ export class ErosionTrack implements Track {
     moistureScale: 2.0,
     pipeCoeff: 1.0,
     cellSize,
-    Kc: 1.0,
+    Kc: 0.05,
     Ks: 0.3,
     Kd: 0.5,
     Ke: 0.5,
     minSlope: 0.05,
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
+    Kt: 0.5,
+    talus: 0.01,     // height units; heights are in [0,1], so 0.01 ≈ 43° at 18x height scale
   };
 
   init(gui: GUI) {
@@ -138,7 +142,7 @@ export class ErosionTrack implements Track {
 
     // SimParams struct; grow the size as fields are added (16-byte multiples).
     this.simUniforms = device.createBuffer({
-      size: 48,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -191,6 +195,11 @@ export class ErosionTrack implements Track {
     this.transportPipeline = device.createComputePipeline({
       layout: 'auto',
       compute: { module: erosionModule, entryPoint: 'transport' },
+    }); 
+
+    this.thermalPipeline = device.createComputePipeline({
+      layout: 'auto',
+      compute: { module: erosionModule, entryPoint: 'thermal' },
     }); 
 
     // --- Bind groups ---
@@ -269,6 +278,15 @@ export class ErosionTrack implements Track {
       ],
     }));
 
+    this.thermalBindGroups = [0, 1].map((i) => device.createBindGroup({
+      layout: this.thermalPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: {buffer: this.simUniforms } },
+        { binding: 1, resource: this.stateTex[i].createView() },
+        { binding: 2, resource: this.stateTex[1-i].createView() },
+      ],
+    }));
+
     // --- GUI ---
     // Noise params need a re-run of the compute pass; heightScale is read every frame.
     const regen = () => this.generateHeightfield();
@@ -286,8 +304,10 @@ export class ErosionTrack implements Track {
     simFolder.add(this.sim, 'Ks', 0, 1.0);
     simFolder.add(this.sim, 'Kd', 0, 1.0);
     simFolder.add(this.sim, 'Ke', 0, 1);
+    simFolder.add(this.sim, 'Kt', 0, 1);
     simFolder.add(this.sim, 'minSlope', 0.01, 0.1);
     simFolder.add(this.sim, 'maxDepth', 0.001, 0.05);
+    simFolder.add(this.sim, 'talus', 0.001, 0.05);
 
     // --- Initial state ---
     this.generateHeightfield();
@@ -355,8 +375,10 @@ export class ErosionTrack implements Track {
       this.sim.Ks,
       this.sim.Kd,
       this.sim.Ke,
+      this.sim.Kt,
       this.sim.minSlope,
       this.sim.maxDepth,
+      this.sim.talus,
     ]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {
@@ -365,6 +387,7 @@ export class ErosionTrack implements Track {
       this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state');
       this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state');
       this.step(encoder, this.transportPipeline, this.transportBindGroups[this.stateCur], 'state');
+      this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state');
     }
     this.export(encoder);
 
