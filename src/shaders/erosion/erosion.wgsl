@@ -5,6 +5,11 @@ struct SimParams {
   
   pipeCoeff: f32,
   cellSize: f32,
+
+  Kc: f32,
+  Ks: f32,
+  Kd: f32,
+  minSlope: f32,
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
@@ -15,6 +20,7 @@ struct SimParams {
 @group(0) @binding(4) var fluxOut: texture_storage_2d<rgba32float, write>;
 
 @group(0) @binding(5) var velocityOut: texture_storage_2d<rg32float, write>;
+@group(0) @binding(6) var velocityIn: texture_2d<f32>;
 
 @compute @workgroup_size(8, 8)
 fn rain(@builtin(global_invocation_id) id: vec3u) {
@@ -125,4 +131,50 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
 
   textureStore(stateOut, p, vec4f(me.r, d2, me.b, 0));
   textureStore(velocityOut, p, vec4f(u, v, 0, 0));
+}
+
+@compute @workgroup_size(8, 8)
+fn erodeDeposit(@builtin(global_invocation_id) id: vec3u) {
+  let dims = vec2i(textureDimensions(stateIn));
+  let p = vec2i(id.xy);
+  if (any(p >= dims)) { return; }
+
+  let me = textureLoad(stateIn, p, 0);
+  let vel = textureLoad(velocityIn, p, 0).xy;
+  let speed = length(vel);
+
+  // Neighbor terrain heights for the slope. Past the boundary there is no
+  // neighbor, so use our own height: that side contributes zero slope
+  // (compare water(), where "no neighbor" means zero inflow instead).
+  var b_L = me.r;
+  var b_R = me.r;
+  var b_D = me.r;
+  var b_U = me.r;
+  if (p.x > 0)          { b_L = textureLoad(stateIn, p + vec2i(-1, 0), 0).r; }
+  if (p.x < dims.x - 1) { b_R = textureLoad(stateIn, p + vec2i( 1, 0), 0).r; }
+  if (p.y > 0)          { b_D = textureLoad(stateIn, p + vec2i(0, -1), 0).r; }
+  if (p.y < dims.y - 1) { b_U = textureLoad(stateIn, p + vec2i(0,  1), 0).r; }
+
+  let grad = vec2f(b_R - b_L, b_U - b_D) / (2 * sim.cellSize);
+  var sinAlpha = length(grad) / sqrt(1 + dot(grad, grad));
+  sinAlpha = max(sinAlpha, sim.minSlope);
+
+  let c = sim.Kc * sinAlpha * speed;
+
+  var b = me.r;
+  var s = me.b;
+  var delta = 0.0;
+  if (c > s) {
+    delta = sim.Ks * (c - s);
+    b -= delta;
+    s += delta;
+  }
+  else {
+    delta = sim.Kd * (s - c);
+    b += delta;
+    s -= delta;
+  }
+  b = max(b, 0);
+
+  textureStore(stateOut, p, vec4f(b, me.g, s, 0));
 }
