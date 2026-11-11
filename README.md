@@ -75,11 +75,11 @@ shaded scene and the height, moisture, slope, species and viability maps.
 
 Moving from the terrain and ecosystem to actual parametric flowers.  In the pipeline, the terrain is drawn first, and then the plants are drawn in a single indirect call.  This ensures that the CPU is never responsible for how many plants there are, or any vertex geometry information.  Similar parametric no-geometry mesh ideation as with the Kuth et. al. (2025) Real Time GPU Tree Generation paper.  This step replaces the dummy placeholder vertex shader flowers previously used for testing.
 
-![](image-1.png)
+![](media/parametric/image-1.png)
 
-![](image-2.png)
+![](media/parametric/image-2.png)
 
-![](image.png)
+![](media/parametric/image.png)
 
 Each flower reads its “vertex instance”, looks up its flower species for the correct parameters, then decodes the vertex index into a specific part (stem, leaf, etc.).  Vertex indices are separated into these patches; quads defined by some uv, usually u is part length and v is part breadth.
 
