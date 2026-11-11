@@ -36,7 +36,7 @@ function defaults(petalColor: number[]): FlowerSpecies {
         petalCount: 6,
         leafCount: 2,
         stemHeight: 1,
-        stemRadius: 0.03,
+        stemRadius: 0.02,
         stemBend: 0.1,
         leafLength: 0.3,
         leafWidth: 0.12,

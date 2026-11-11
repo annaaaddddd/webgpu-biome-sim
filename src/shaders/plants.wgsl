@@ -141,6 +141,7 @@ fn leafPos(p: FlowerParams, i: u32, uv: vec2f) -> vec3f {
 }
 
 // Petals crown the head
+// need to fix rotation to follow stem bend
 fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
   let tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
   let dir = vec3f(cos(tilt), sin(tilt), 0.0);
@@ -159,6 +160,8 @@ fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
 }
 
 // Flat-ish dome on top of stem
+// currently doesn't follow stem bend
+// both center and petals are currently oriented globally
 fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
   let th = uv.x * 0.5 * PI;
   let ph = uv.y * TAU;
