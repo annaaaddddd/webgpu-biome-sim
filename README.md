@@ -64,6 +64,13 @@ The fix has two parts:
 
 *All captures: 512 x 512 grid, dt 0.05, 1 step/frame at ~60 fps; rain 0.02, pipe 1.0, Kc 0.05, Ks 0.3, Kd 0.5, Ke 0.5, Kt 0.5, talus 0.01, maxDepth 0.01. The moisture view uses moistureScale 25 instead of the default 2. Taken before the velocity clamp fix; with the clamp active the same look needs Kc 0.01, which is now the default.*
 
+One full sim step takes about 0.12 ms on the GPU at 512 x 512, well under 1% of a 60 fps frame. No single pass dominates: water is the slowest at about 20% of the step, and every pass is a full-grid read and write of float textures, so the cost is spread evenly. Timed with `?track=erosion&bench=300&steps=10&warmup=600`, which records GPU timestamps around each pass of the first step in a frame.
+
+![GPU time per erosion pass](media/erosion/erosion_timing_512.svg)
+
+*NVIDIA RTX 3090 Ti, AMD Ryzen 9 5950X, Windows 11 25H2, Chrome 157. 10 steps/frame to keep the GPU clock steady; only the first step of each frame is timed. Median of 300 samples, raw data in `media/erosion/erosion_timing_512.csv`. Needs Chrome's WebGPU developer features flag; without it timestamps are coarsely quantized (65 us steps on this machine) and these numbers are meaningless.*
+
+
 ### Ecosystem track
 
 Rules follow Cordonnier et al. 2017, cut down to live or die. Every cell scores each species
