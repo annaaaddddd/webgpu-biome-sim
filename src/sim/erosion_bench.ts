@@ -1,9 +1,9 @@
 import { device } from '../core/device';
 
 // GPU timing for compute passes, driven by URL params:
-//   ?bench=N      record N samples, then print mean/median/p95 per pass to the
-//                 console and download the raw samples as CSV
+//   ?bench=N      record N samples, then print mean/median/p95 per pass to the console
 //   &warmup=M     skip the first M readings (default 60)
+//   &csv          also download the raw samples as CSV
 // Needs the 'timestamp-query' feature, requested in device.ts when available.
 // Without Chrome's WebGPU developer features flag the timestamps are coarsely
 // quantized and the numbers are not meaningful.
@@ -19,6 +19,7 @@ export interface BenchOptions {
   warmup: number;
   stepPasses: number; // the first N passes make up one sim step; the rest are per-frame
   label: string;      // printed with the table, e.g. "erosion 512x512, 10 steps/frame"
+  csv: boolean;       // download the raw samples when done
   file: string;       // download name for the CSV
 }
 
@@ -29,18 +30,24 @@ export class PassTimer {
   private copied = false;  // resolve + copy was encoded this frame
   private reading = false; // readBuf is mapped or about to be
   private samples: number[][] = [];
+  // A pass the caller skips writes no timestamps, and its query slots keep
+  // whatever an earlier frame left there. Track which slots were written so
+  // a skipped pass reads as 0 ms instead of a stale time.
+  private written = new Set<number>();    // slots timed so far this frame
+  private resolved = new Set<number>();   // slots timed in the frame being read back
   private warmup: number;
   private done = false;
   readonly names: readonly string[];
   readonly opts: BenchOptions;
 
   // Returns undefined when the URL has no ?bench=N.
-  static fromUrl(names: readonly string[], opts: Omit<BenchOptions, 'samples' | 'warmup'>) {
+  static fromUrl(names: readonly string[], opts: Omit<BenchOptions, 'samples' | 'warmup' | 'csv'>) {
     const query = new URLSearchParams(location.search);
     const samples = Number(query.get('bench') ?? 0);
     if (samples <= 0) return undefined;
     const warmup = Number(query.get('warmup') ?? 60);
-    return new PassTimer(names, { ...opts, samples, warmup });
+    const csv = query.has('csv');
+    return new PassTimer(names, { ...opts, samples, warmup, csv });
   }
 
   constructor(names: readonly string[], opts: BenchOptions) {
@@ -57,18 +64,20 @@ export class PassTimer {
   // Timestamp writes for pass `slot` (index into names); undefined when not timing.
   writes(slot?: number): GPUComputePassTimestampWrites | undefined {
     if (this.done || slot === undefined) return undefined;
+    this.written.add(slot);
     return { querySet: this.querySet, beginningOfPassWriteIndex: slot * 2, endOfPassWriteIndex: slot * 2 + 1 };
   }
 
   // Call at the start of a frame. Maps the previous frame's readback, so the
   // buffer is never both a copy target and mapped within one submit.
   beginFrame() {
+    this.written.clear();
     if (this.done || !this.copied || this.reading) return;
     this.copied = false;
     this.reading = true;
     this.readBuf.mapAsync(GPUMapMode.READ).then(() => {
       const t = new BigInt64Array(this.readBuf.getMappedRange());
-      const ms = this.names.map((_, i) => Number(t[i * 2 + 1] - t[i * 2]) / 1e6);
+      const ms = this.names.map((_, i) => (this.resolved.has(i) ? Number(t[i * 2 + 1] - t[i * 2]) / 1e6 : 0));
       this.readBuf.unmap();
       this.reading = false;
 
@@ -85,6 +94,7 @@ export class PassTimer {
     encoder.resolveQuerySet(this.querySet, 0, count, this.resolveBuf, 0);
     encoder.copyBufferToBuffer(this.resolveBuf, 0, this.readBuf, 0, count * 8);
     this.copied = true;
+    this.resolved = new Set(this.written);
   }
 
   private finish() {
@@ -99,14 +109,16 @@ export class PassTimer {
     console.log(`bench: ${this.opts.label}, ${this.samples.length} samples, ms per pass`);
     console.table(rows);
 
-    const csv = [
-      ['sample', ...this.names, 'step'].join(','),
-      ...this.samples.map((f, i) => [i, ...f.map((x) => x.toFixed(4)), step[i].toFixed(4)].join(',')),
-    ].join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = this.opts.file;
-    a.click();
+    if (this.opts.csv) {
+      const csv = [
+        ['sample', ...this.names, 'step'].join(','),
+        ...this.samples.map((f, i) => [i, ...f.map((x) => x.toFixed(4)), step[i].toFixed(4)].join(',')),
+      ].join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = this.opts.file;
+      a.click();
+    }
 
     this.querySet.destroy();
     this.resolveBuf.destroy();
