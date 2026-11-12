@@ -1,8 +1,6 @@
 // Generates the starting terrain and clears the sim state. One thread per texel.
-// The height shaping matches terrain_stub.wgsl so both tracks start from the
-// same kind of map
-// Compiled with the shared prelude, so fbm comes from common.wgsl and the same
-// seed gives the same map as the stub terrain.
+// Compiled with the shared prelude (fbm from common.wgsl) and shaped like
+// terrain_stub.wgsl, so the same seed gives the same map as the stub terrain.
 
 // Must match the Float32Array in ErosionSim.reset().
 struct Params {
@@ -13,7 +11,7 @@ struct Params {
 @group(0) @binding(1) var stateOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(2) var fluxOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var velocityOut: texture_storage_2d<rg32float, write>;
-@group(0) @binding(4) var moistureOut: texture_storage_2d<r32float, write>;
+@group(0) @binding(4) var wetOut: texture_storage_2d<r32float, write>; // EMA of water depth, see export.wgsl; a new map starts dry
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -37,6 +35,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   textureStore(stateOut, id.xy, vec4f(h, 0, 0, 0));
   textureStore(fluxOut, id.xy, vec4f(0));
   textureStore(velocityOut, id.xy, vec4f(0));
-  // Moisture accumulates over time; a new map starts dry.
-  textureStore(moistureOut, id.xy, vec4f(0));
+  textureStore(wetOut, id.xy, vec4f(0));
 }
