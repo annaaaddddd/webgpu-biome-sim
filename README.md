@@ -86,6 +86,22 @@ on height, slope and moisture. Empty cells get seeded from plants nearby, occupi
 and die faster the worse they fit. `play` steps the simulation, `view` switches between the
 shaded scene and the height, moisture, slope, species and viability maps.
 
+### Parametric track
+
+Moving from the terrain and ecosystem to actual parametric flowers.  In the pipeline, the terrain is drawn first, and then the plants are drawn in a single indirect call.  This ensures that the CPU is never responsible for how many plants there are, or any vertex geometry information.  Similar parametric no-geometry mesh ideation as with the Kuth et. al. (2025) Real Time GPU Tree Generation paper.  This step replaces the dummy placeholder vertex shader flowers previously used for testing.
+
+![](media/parametric/image-1.png)
+
+![](media/parametric/image-2.png)
+
+![](media/parametric/image.png)
+
+Each flower reads its “vertex instance”, looks up its flower species for the correct parameters, then decodes the vertex index into a specific part (stem, leaf, etc.).  Vertex indices are separated into these patches; quads defined by some uv, usually u is part length and v is part breadth.
+
+The uv is simply discarded if toggled off, but if toggled on, is calculated positionally using a placement surface function unique to each part of the plant.  This is how the stem is placed first, then the leaves going along the stem, then the disc center and the petals.  A plant instance has position, species, age, viability attributes; specific flower params include toggles, counts, shape floats, and colors.
+
+By keeping a shape per species, variation per instance model, we can keep flowers as fixed sets of parts.  lil gui then edits flower species object and packs all four species into one write buffer.  Ultimately, no geometry is stored, allowing for massive flower instancing.
+
 ## Shared layout
 
 Defined in `src/core/layout.ts` so the three tracks merge cleanly:

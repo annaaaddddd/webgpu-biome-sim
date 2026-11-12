@@ -13,6 +13,7 @@ export function terrainIndices(n: number) {
 
 // Stand-in flower: a thin stem topped by a cup. Interleaved position, normal, part
 // (0 = stem, 1 = head), unit height.
+// Now unused by default due to parametric integration
 export function plantProxyMesh() {
   const vertices: number[] = [];
   const indices: number[] = [];
