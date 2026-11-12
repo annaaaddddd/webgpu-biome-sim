@@ -21,6 +21,7 @@ import {
 import { createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
+import { ErosionSim } from './erosion_sim';
 import commonWgsl from '../shaders/common.wgsl?raw';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
@@ -95,6 +96,8 @@ export class EcosystemTrack implements Track {
 
   private height = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
   private moisture = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
+  private erosion = new ErosionSim(this.height, this.moisture);
+  private useStub = new URLSearchParams(location.search).get('terrain') === 'stub';
   private state = createGridTexture(GRID, STATE_FORMAT, T.TEXTURE_BINDING | T.COPY_DST);
   private stateNext = createGridTexture(GRID, STATE_FORMAT, T.STORAGE_BINDING | T.COPY_SRC);
 
@@ -169,19 +172,26 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
     this.flowers.addGui(gui);
+    this.erosion.addGui(gui.addFolder('Erosion'), false);
   }
 
   frame(encoder: GPUCommandEncoder, dt: number) {
     this.targets.update();
     if (this.terrainDirty) this.generateTerrain(encoder);
+    if (!this.useStub) this.erosion.frame(encoder);
     if (this.stateDirty || this.takeStep(dt)) this.step(encoder);
     this.compact(encoder);
     this.draw(encoder);
   }
 
   private generateTerrain(encoder: GPUCommandEncoder) {
-    device.queue.writeBuffer(this.stubParams, 0, new Float32Array([this.settings.seed]));
-    dispatchGrid(encoder, this.stubPipeline, this.stubBindGroup, GRID);
+    if (this.useStub) {
+      device.queue.writeBuffer(this.stubParams, 0, new Float32Array([this.settings.seed]));
+      dispatchGrid(encoder, this.stubPipeline, this.stubBindGroup, GRID);
+    } else {
+      this.erosion.seed = this.settings.seed;
+      this.erosion.dirty = true;
+    }
     this.terrainDirty = false;
     this.stateDirty = true;
   }

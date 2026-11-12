@@ -21,8 +21,6 @@ export class ErosionSim {
 
   bench?: PassTimer;
   dirty = true;          // next frame() calls reset() to regenerate the heightfield
-  frequency = 4;
-  octaves = 5;
   seed = 0;
   // Uploaded to SimParams every frame; GUI-tunable via addGui().
   sim = {
@@ -92,7 +90,7 @@ export class ErosionSim {
     });
 
     // --- Buffers ---
-    // Params: 3 f32 (frequency, octaves, seed), padded to 16 bytes.
+    // Params: seed, padded to 16 bytes.
     this.heightfieldUniforms = device.createBuffer({
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -230,11 +228,9 @@ export class ErosionSim {
     }));
   }
 
-  addGui(gui: GUI) {
-    const regen = () => (this.dirty = true);
-    gui.add(this, 'frequency', 0.5, 16).onChange(regen);
-    gui.add(this, 'octaves', 1, 8).step(1).onChange(regen);
-    gui.add(this, 'seed').onChange(regen);
+  // `seed` is skipped when the caller already has its own seed control.
+  addGui(gui: GUI, seed = true) {
+    if (seed) gui.add(this, 'seed').onChange(() => (this.dirty = true));
 
     const simFolder = gui.addFolder('Simulation');
     simFolder.add(this.sim, 'dt', 0.001, 0.2);
@@ -290,7 +286,7 @@ export class ErosionSim {
   reset(encoder: GPUCommandEncoder) {
     this.stateCur = 0;
     this.fluxCur = 0;
-    device.queue.writeBuffer(this.heightfieldUniforms, 0, new Float32Array([this.frequency, this.octaves, this.seed]));
+    device.queue.writeBuffer(this.heightfieldUniforms, 0, new Float32Array([this.seed]));
     this.dispatch(encoder, this.heightfieldPipeline, this.heightfieldBindGroup);
     this.dirty = false;
   }
