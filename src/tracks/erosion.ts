@@ -5,122 +5,45 @@ import { camera } from '../core/camera';
 import { GRID, WORLD_SIZE, HEIGHT_SCALE } from '../core/layout';
 import { PassTimer } from './erosion_bench';
 
-import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
-import exportSrc from '../shaders/erosion/export.wgsl?raw';
-import erosionPassesSrc from '../shaders/erosion/erosion.wgsl?raw';
+import { ErosionSim } from './erosion_sim';
 
 // Two triangles per grid cell.
 const indexCount = (GRID - 1) * (GRID - 1) * 6;
-const cellSize = WORLD_SIZE / GRID;
 
-// Erosion track: generate an fBm heightfield on the GPU, render it as a mesh.
+// Erosion track: runs ErosionSim and draws its height and moisture output as a
+// terrain mesh, with height/moisture debug views.
 export class ErosionTrack implements Track {
-  // --- GPU resources ---
-  // Both r32float in [0, 1]; these are what the ecosystem track reads.
-  heightTex!: GPUTexture;
-  moistureTex!: GPUTexture;
-  heightfieldUniforms!: GPUBuffer;
-  heightfieldPipeline!: GPUComputePipeline;
-  heightfieldBindGroup!: GPUBindGroup;
+  erosionSim!: ErosionSim;
 
+  // --- GPU resources ---
   indexBuffer!: GPUBuffer;
   depthTex?: GPUTexture; // created on the first frame()
   terrainUniforms!: GPUBuffer;
   terrainPipeline!: GPURenderPipeline;
   terrainBindGroup!: GPUBindGroup;
 
-  stateTex!: GPUTexture[];   // b: height, d: water depth, s: sediment
-  fluxTex!: GPUTexture[];    // flux to 4 directions: left, right, top, bottom
-  velocityTex!: GPUTexture;  // velocity (u, v)
-  stateCur = 0;
-  fluxCur = 0;
-
-  exportPipeline!: GPUComputePipeline;
-  exportBindGroups!: GPUBindGroup[];
-
-  simUniforms!: GPUBuffer;
-  rainPipeline!: GPUComputePipeline;
-  rainBindGroups!: GPUBindGroup[];
-  fluxPipeline!: GPUComputePipeline;
-  fluxBindGroups!: GPUBindGroup[];
-  waterPipeline!: GPUComputePipeline;
-  waterBindGroups!: GPUBindGroup[];
-  erodeDepositPipeline!: GPUComputePipeline;
-  erodeDepositBindGroups!: GPUBindGroup[];
-  transportPipeline!: GPUComputePipeline;
-  transportBindGroups!: GPUBindGroup[];
-  thermalPipeline!: GPUComputePipeline;
-  thermalBindGroups!: GPUBindGroup[];
-
-  // Pass timing for ?track=erosion&bench=N (see erosion_bench.ts). Slots index this list.
-  static readonly PASS_NAMES = ['rain', 'flux', 'water', 'erodeDeposit', 'transport', 'thermal', 'export'];
-  bench?: PassTimer;
-
-  // --- GUI params ---
-  frequency = 4;
-  octaves = 5;
-  seed = 0;
   heightScale = HEIGHT_SCALE;
   view = 0; // 0 shaded, 1 height, 2 moisture (see fs_main in terrain.wgsl)
-
-  // Simulation params. Uploaded every frame; field order must match `struct SimParams` in erosion.wgsl.
-  sim = {
-    dt: 0.05,        // simulation step, not frame time
-    rainRate: 0.02,
-    stepsPerFrame: 1,
-    moistureScale: 2.0,
-    pipeCoeff: 1.0,
-    cellSize,
-    Kc: 0.01,
-    Ks: 0.3,
-    Kd: 0.5,
-    Ke: 0.5,
-    minSlope: 0.05,
-    maxDepth: 0.01,  // water depth at which erosion reaches full strength
-    Kt: 0.5,
-    talus: 0.01,     // height units; heights are in [0,1], so 0.01 is about 43 deg at 18x height scale
-    moistureTau: 2.0, // sim seconds for moisture to catch up with water depth
-  };
 
   init(gui: GUI) {
     // Pull the camera back so the whole grid is in view.
     camera.distance = 150;
     camera.target[1] = 8;
 
-    // --- Textures ---
-    // Simulation state, ping-ponged between [0] and [1] (see `cur`).
-    const stateAndFluxTexDesc: GPUTextureDescriptor = {
-      size: [GRID, GRID],
-      format: 'rgba32float',
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-    };
-    this.stateTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
-    this.fluxTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
-
-    this.velocityTex = device.createTexture({
-      size: [GRID, GRID],
-      format: 'rg32float',
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-    });
-
-    // Outputs: written by the export pass, read by the terrain shaders.
+    // Shared height/moisture textures: ErosionSim writes them in its export
+    // pass, the terrain shader reads them.
     const terrainTexDesc: GPUTextureDescriptor = {
       size: [GRID, GRID],
       format: 'r32float',
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     };
-    this.heightTex = device.createTexture(terrainTexDesc);
-    this.moistureTex = device.createTexture(terrainTexDesc);
+    const heightTex = device.createTexture(terrainTexDesc);
+    const moistureTex = device.createTexture(terrainTexDesc);
 
-    // --- Buffers ---
-    // Params: 3 f32 (frequency, octaves, seed), padded to 16 bytes.
-    this.heightfieldUniforms = device.createBuffer({
-      size: 16,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+    this.erosionSim = new ErosionSim(heightTex, moistureTex);
 
-    // Only heightScale (4 bytes) is used; uniform buffers are padded to 16.
+    // TerrainUniforms { heightScale, view }: 8 bytes, padded to 16.
     this.terrainUniforms = device.createBuffer({
       size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -144,24 +67,6 @@ export class ErosionTrack implements Track {
     }
     device.queue.writeBuffer(this.indexBuffer, 0, indices);
 
-    // SimParams struct; grow the size as fields are added (16-byte multiples).
-    this.simUniforms = device.createBuffer({
-      size: 64,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    // --- Pipelines ---
-    // layout: 'auto' infers the bind group layout from the shader.
-    this.heightfieldPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: device.createShaderModule({ code: heightfieldSrc }), entryPoint: 'main' },
-    });
-
-    this.exportPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: device.createShaderModule({ code: exportSrc }), entryPoint: 'main' },
-    });
-
     const module = device.createShaderModule({ code: terrainSrc });
     this.terrainPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -175,206 +80,32 @@ export class ErosionTrack implements Track {
       },
     });
 
-    const erosionModule = device.createShaderModule({ code: erosionPassesSrc });
-    this.rainPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'rain' },
-    });
-
-    this.fluxPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'flux' },
-    }); 
-
-    this.waterPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'water' },
-    }); 
-
-    this.erodeDepositPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'erodeDeposit' },
-    }); 
-
-    this.transportPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'transport' },
-    }); 
-
-    this.thermalPipeline = device.createComputePipeline({
-      layout: 'auto',
-      compute: { module: erosionModule, entryPoint: 'thermal' },
-    }); 
-
-    // --- Bind groups ---
-    this.heightfieldBindGroup = device.createBindGroup({
-      layout: this.heightfieldPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.heightfieldUniforms } },
-        { binding: 1, resource: this.stateTex[this.stateCur].createView() },
-        { binding: 2, resource: this.fluxTex[this.fluxCur].createView() },
-        { binding: 3, resource: this.velocityTex.createView() },
-        { binding: 4, resource: this.moistureTex.createView() },
-      ],
-    });
-
-    // One per ping-pong side; frame() picks exportBindGroups[cur].
-    this.exportBindGroups = [0, 1].map((i) => device.createBindGroup({
-      layout: this.exportPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.stateTex[i].createView() },
-        { binding: 1, resource: this.heightTex.createView() },
-        { binding: 2, resource: this.moistureTex.createView() },
-        { binding: 3, resource: {buffer: this.simUniforms } },
-      ],
-    }));
-
     this.terrainBindGroup = device.createBindGroup({
       layout: this.terrainPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: camera.uniformBuffer } },
-        { binding: 1, resource: this.heightTex.createView() },
+        { binding: 1, resource: this.erosionSim.height.createView() },
         { binding: 2, resource: { buffer: this.terrainUniforms } },
-        { binding: 3, resource: this.moistureTex.createView() },
+        { binding: 3, resource: this.erosionSim.moisture.createView() },
       ],
     });
 
-    this.rainBindGroups = [0, 1].map((i) => device.createBindGroup({
-      layout: this.rainPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: {buffer: this.simUniforms } },
-        { binding: 1, resource: this.stateTex[i].createView() },
-        { binding: 2, resource: this.stateTex[1-i].createView() },
-      ],
-    }));
-
-    this.fluxBindGroups = this.bindGroups4(this.fluxPipeline, (s, f) => [
-      { binding: 0, resource: {buffer: this.simUniforms } },
-      { binding: 1, resource: this.stateTex[s].createView() },
-      { binding: 3, resource: this.fluxTex[f].createView() },
-      { binding: 4, resource: this.fluxTex[1-f].createView() },
-    ]);
-
-    this.waterBindGroups = this.bindGroups4(this.waterPipeline, (s, f) => [
-      { binding: 0, resource: {buffer: this.simUniforms } },
-      { binding: 1, resource: this.stateTex[s].createView() },
-      { binding: 2, resource: this.stateTex[1-s].createView() },
-      { binding: 3, resource: this.fluxTex[f].createView() },
-      { binding: 5, resource: this.velocityTex.createView() },
-    ]);
-
-    this.erodeDepositBindGroups = [0, 1].map((i) => device.createBindGroup({
-      layout: this.erodeDepositPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: {buffer: this.simUniforms } },
-        { binding: 1, resource: this.stateTex[i].createView() },
-        { binding: 2, resource: this.stateTex[1-i].createView() },
-        { binding: 6, resource: this.velocityTex.createView() },
-      ],
-    }));
-
-    this.transportBindGroups = [0, 1].map((i) => device.createBindGroup({
-      layout: this.transportPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: {buffer: this.simUniforms } },
-        { binding: 1, resource: this.stateTex[i].createView() },
-        { binding: 2, resource: this.stateTex[1-i].createView() },
-        { binding: 6, resource: this.velocityTex.createView() },
-      ],
-    }));
-
-    this.thermalBindGroups = [0, 1].map((i) => device.createBindGroup({
-      layout: this.thermalPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: {buffer: this.simUniforms } },
-        { binding: 1, resource: this.stateTex[i].createView() },
-        { binding: 2, resource: this.stateTex[1-i].createView() },
-      ],
-    }));
-
     // --- GUI ---
-    // Noise params need a re-run of the compute pass; heightScale is read every frame.
-    const regen = () => this.generateHeightfield();
-    gui.add(this, 'frequency', 0.5, 16).onChange(regen);
-    gui.add(this, 'octaves', 1, 8).step(1).onChange(regen);
-    gui.add(this, 'seed').onChange(regen);
     gui.add(this, 'heightScale', 1, 50);
     gui.add(this, 'view', { shaded: 0, height: 1, moisture: 2 });
-
-    const simFolder = gui.addFolder('Simulation');
-    simFolder.add(this.sim, 'dt', 0.001, 0.2);
-    simFolder.add(this.sim, 'moistureScale', 1, 50);
-    simFolder.add(this.sim, 'moistureTau', 0.1, 20);
-    simFolder.add(this.sim, 'rainRate', 0, 2);
-    simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
-    simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
-    simFolder.add(this.sim, 'Kc', 0, 2.0);
-    simFolder.add(this.sim, 'Ks', 0, 1.0);
-    simFolder.add(this.sim, 'Kd', 0, 1.0);
-    simFolder.add(this.sim, 'Ke', 0, 1);
-    simFolder.add(this.sim, 'Kt', 0, 1);
-    simFolder.add(this.sim, 'minSlope', 0.01, 0.1);
-    simFolder.add(this.sim, 'maxDepth', 0.001, 0.05);
-    simFolder.add(this.sim, 'talus', 0.001, 0.05);
+    this.erosionSim.addGui(gui);
 
     // &steps=N keeps the GPU busy so its clock does not drift during a bench run.
     const steps = new URLSearchParams(location.search).get('steps');
-    if (steps !== null) this.sim.stepsPerFrame = Number(steps);
-    this.bench = PassTimer.fromUrl(ErosionTrack.PASS_NAMES, {
+    if (steps !== null) this.erosionSim.sim.stepsPerFrame = Number(steps);
+    this.erosionSim.bench = PassTimer.fromUrl(ErosionSim.PASS_NAMES, {
       stepPasses: 6, // one sim step; export runs once per frame
-      label: `erosion ${GRID}x${GRID}, ${this.sim.stepsPerFrame} steps/frame`,
+      label: `erosion ${GRID}x${GRID}, ${this.erosionSim.sim.stepsPerFrame} steps/frame`,
       file: `erosion_timing_${GRID}.csv`,
     });
-
-    // --- Initial state ---
-    this.generateHeightfield();
-  }
-
-  bindGroups4(pipeline: GPUComputePipeline, entries: (s: number, f: number) => GPUBindGroupEntry[]) {
-    return [0, 1, 2, 3].map((k) => device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: entries(k >> 1, k & 1),
-    }));
-  }
-
-  // One full-grid compute pass: one thread per texel, 8x8 workgroups
-  // (matches @workgroup_size in the shaders).
-  // `slot` (index into PASS_NAMES) times the pass when a bench run is active.
-  dispatch(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, slot?: number) {
-    const pass = encoder.beginComputePass({ timestampWrites: this.bench?.writes(slot) });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(Math.ceil(GRID / 8), Math.ceil(GRID / 8));
-    pass.end();
-  }
-
-  // A simulation pass: reads side `cur`, writes the other side, then flips.
-  step(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, which: 'state' | 'flux', slot?: number) {
-    this.dispatch(encoder, pipeline, bindGroup, slot);
-
-    if (which === 'state') this.stateCur = 1 - this.stateCur;
-    else this.fluxCur = 1 - this.fluxCur;
-  }
-
-  // Upload noise params and regenerate the heightfield into side 0.
-  // Resets the ping-pong so the simulation restarts from this terrain.
-  generateHeightfield() {
-    this.stateCur = 0;
-    this.fluxCur = 0;
-    device.queue.writeBuffer(this.heightfieldUniforms, 0, new Float32Array([this.frequency, this.octaves, this.seed]));
-    const encoder = device.createCommandEncoder();
-    this.dispatch(encoder, this.heightfieldPipeline, this.heightfieldBindGroup);
-    device.queue.submit([encoder.finish()]);
-  }
-
-  // Copy the current state into the height/moisture textures. Reads only, no flip.
-  export(encoder: GPUCommandEncoder) {
-    this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.stateCur], 6);
   }
 
   frame(encoder: GPUCommandEncoder, _dt: number) {
-    this.bench?.beginFrame();
-
     // Depth texture must match the canvas size; rebuild it after a resize.
     if (!this.depthTex || this.depthTex.width !== canvas.width || this.depthTex.height !== canvas.height) {
       this.depthTex?.destroy();
@@ -385,36 +116,9 @@ export class ErosionTrack implements Track {
       });
     }
     device.queue.writeBuffer(this.terrainUniforms, 0, new Float32Array([this.heightScale, this.view]));
-    device.queue.writeBuffer(this.simUniforms, 0, new Float32Array([
-      this.sim.dt, 
-      this.sim.rainRate, 
-      this.sim.moistureScale, 
-      this.sim.pipeCoeff, 
-      cellSize,
-      this.sim.Kc,
-      this.sim.Ks,
-      this.sim.Kd,
-      this.sim.Ke,
-      this.sim.Kt,
-      this.sim.minSlope,
-      this.sim.maxDepth,
-      this.sim.talus,
-      this.sim.moistureTau,
-    ]));
 
-    for (let i = 0; i < this.sim.stepsPerFrame; i++) {
-      // Only the first step of the frame is timed, so later steps do not overwrite it.
-      const slot = (k: number) => (i === 0 ? k : undefined);
-      this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state', slot(0));
-      this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux', slot(1));
-      this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state', slot(2));
-      this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state', slot(3));
-      this.step(encoder, this.transportPipeline, this.transportBindGroups[this.stateCur], 'state', slot(4));
-      this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state', slot(5));
-    }
-    this.export(encoder);
-
-    if (this.sim.stepsPerFrame > 0) this.bench?.endFrame(encoder);
+    // Sim steps + export, then draw the result in the same encoder.
+    this.erosionSim.frame(encoder);
 
     const pass = encoder.beginRenderPass({
       colorAttachments: [{

@@ -17,6 +17,7 @@ struct SimParams {
   maxDepth: f32,
   talus: f32,
   moistureTau: f32,
+  frameDt: f32,
 }
 
 // stateTex[cur]: r = terrain height (b), g = water depth (d), b = sediment (s).
@@ -36,10 +37,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   // Moisture is an exponential moving average of water depth: it rises while
   // a cell is wet and decays with time constant moistureTau once the water
   // leaves, so the ecosystem sees "recently wet" rather than a flickering
-  // per-frame depth. k is derived from dt so the decay rate does not change
-  // with dt or stepsPerFrame.
+  // per-frame depth. k is derived from the sim time elapsed this frame, so
+  // the decay rate does not change with dt or stepsPerFrame.
   let wet = clamp(cell.g * sim.moistureScale, 0, 1);
   let prev = textureLoad(moistureOut, id.xy).r;
-  let k = 1.0 - exp(-sim.dt / sim.moistureTau);
+  let k = 1.0 - exp(-sim.frameDt / sim.moistureTau);
   textureStore(moistureOut, id.xy, vec4f(mix(prev, wet, k), 0, 0, 0));
 }

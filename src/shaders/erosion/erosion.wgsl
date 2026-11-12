@@ -15,6 +15,7 @@ struct SimParams {
   maxDepth: f32,
   talus: f32,       // max height difference (in height units) between neighbors before material slides
   moistureTau: f32, // seconds of sim time for moisture to follow water depth (export pass only)
+  frameDt: f32,     // sim time advanced this frame, dt * stepsPerFrame (export pass only)
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
