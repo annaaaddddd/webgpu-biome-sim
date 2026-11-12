@@ -12,13 +12,15 @@ import {
   STATE_FORMAT,
   PLANT_INSTANCE_BYTES,
   DRAW_ARGS_BYTES,
-  SPECIES_COLORS,
+  FLOWER_BUDGET,
+  FLOWER_VERTS,
   SKY_COLOR,
   WATER_LEVEL,
   MSAA_SAMPLES,
 } from '../core/layout';
 import { createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
-import { terrainIndices, plantProxyMesh } from './meshes';
+import { terrainIndices } from './meshes';
+import { Flowers } from './flowers';
 import commonWgsl from '../shaders/common.wgsl?raw';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
@@ -42,7 +44,10 @@ const WORLD_SIZE = ${WORLD_SIZE}f;
 const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
 const WATER_LEVEL = ${WATER_LEVEL}f;
 const SKY = vec3f(${SKY_COLOR.join(', ')});
-const SPECIES_COLORS = array<vec3f, ${MAX_SPECIES}>(${SPECIES_COLORS.map((c) => `vec3f(${c.join(', ')})`).join(', ')});
+const MAX_SPECIES = ${MAX_SPECIES}u;
+${Object.entries(FLOWER_BUDGET)
+  .map(([k, v]) => `const ${k} = ${v}u;`)
+  .join('\n')}
 `;
 
 const B = GPUBufferUsage;
@@ -102,24 +107,15 @@ export class EcosystemTrack implements Track {
 
   private terrainIndexCount = (GRID - 1) * (GRID - 1) * 6;
   private terrainIndexBuffer = createBuffer(B.INDEX, terrainIndices(GRID));
-  private plant = plantProxyMesh();
-  private plantVertexBuffer = createBuffer(B.VERTEX, this.plant.vertices);
-  private plantIndexBuffer = createBuffer(B.INDEX, this.plant.indices);
+  
+  // Use per-species flower shape (created before bind groups use buffer)
+  private flowers = new Flowers();
 
   private stubPipeline = computePipeline(terrainStubWgsl);
   private stepPipeline = computePipeline(ecosystemWgsl);
   private compactPipeline = computePipeline(compactWgsl);
   private terrainPipeline = renderPipeline(terrainWgsl);
-  private plantsPipeline = renderPipeline(plantsWgsl, [
-    {
-      arrayStride: 28,
-      attributes: [
-        { shaderLocation: 0, offset: 0, format: 'float32x3' },
-        { shaderLocation: 1, offset: 12, format: 'float32x3' },
-        { shaderLocation: 2, offset: 24, format: 'float32' },
-      ],
-    },
-  ]);
+  private plantsPipeline = renderPipeline(plantsWgsl); // geometry is from vertex_index
 
   private stubBindGroup = createBindGroup(this.stubPipeline, [
     this.height.createView(),
@@ -145,8 +141,16 @@ export class EcosystemTrack implements Track {
     this.moisture.createView(),
     this.state.createView(),
     { buffer: this.drawParams },
+    { buffer: this.flowers.buffer }
   ]);
-  private plantsBindGroup = createBindGroup(this.plantsPipeline, [{ buffer: camera.uniformBuffer }, { buffer: this.instances }]);
+  private plantsBindGroup = createBindGroup(
+    this.plantsPipeline, 
+    [
+      { buffer: camera.uniformBuffer }, 
+      { buffer: this.instances },
+      { buffer: this.flowers.buffer }
+    ]
+  );
 
   init(gui: GUI) {
     camera.target = vec3.create(0, 4, 0);
@@ -164,6 +168,7 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+    this.flowers.addGui(gui);
   }
 
   frame(encoder: GPUCommandEncoder, dt: number) {
@@ -203,7 +208,7 @@ export class EcosystemTrack implements Track {
   }
 
   private compact(encoder: GPUCommandEncoder) {
-    device.queue.writeBuffer(this.drawArgs, 0, new Uint32Array([this.plant.indexCount, 0, 0, 0, 0]));
+    device.queue.writeBuffer(this.drawArgs, 0, new Uint32Array([FLOWER_VERTS,0, 0, 0]));
     dispatchGrid(encoder, this.compactPipeline, this.compactBindGroup, GRID);
   }
 
@@ -235,9 +240,7 @@ export class EcosystemTrack implements Track {
     if (this.settings.showPlants) {
       pass.setPipeline(this.plantsPipeline);
       pass.setBindGroup(0, this.plantsBindGroup);
-      pass.setVertexBuffer(0, this.plantVertexBuffer);
-      pass.setIndexBuffer(this.plantIndexBuffer, 'uint16');
-      pass.drawIndexedIndirect(this.drawArgs, 0);
+      pass.drawIndirect(this.drawArgs, 0);
     }
     pass.end();
   }

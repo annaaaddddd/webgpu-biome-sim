@@ -1,4 +1,4 @@
-// Shared by every shader. GRID, WORLD_SIZE, HEIGHT_SCALE, SKY and SPECIES_COLORS are
+// Shared by every shader. GRID, WORLD_SIZE, HEIGHT_SCALE, SKY are
 // injected from core/layout.ts before this file.
 
 struct Camera {
@@ -16,6 +16,33 @@ struct PlantInstance {
 }
 
 const SUN_DIR = vec3f(0.645, 0.591, 0.484);
+
+// per-plant species parameters (look for tracks/flowers.ts for packing)
+const F_STEM = 1u;
+const F_LEAVES = 2u;
+const F_PETALS = 4u;
+const F_CENTER = 8u;
+
+struct FlowerParams {
+  flags: u32, 
+  petalCount: u32,
+  leafCount: u32,
+  _pad0: u32,
+  stemHeight: f32,
+  stemRadius: f32,
+  stemBend: f32,
+  leafLength: f32,
+  leafWidth: f32,
+  leafDroop: f32,
+  petalLength: f32,
+  petalWidth: f32,
+  petalCup: f32,
+  centerRadius: f32,
+  _pad1: vec2f,
+  petalColor: vec4f,
+  centerColor: vec4f,
+  stemColor: vec4f
+} // 112 bytes total
 
 fn pcg3d(vIn: vec3u) -> vec3u {
   var v = vIn * 1664525u + 1013904223u;
@@ -92,11 +119,6 @@ fn gradientNormal(g: vec2f) -> vec3f {
 fn gradientSlope(g: vec2f) -> f32 {
   let t = length(g);
   return t / (1.0 + t);
-}
-
-fn speciesColor(id: u32) -> vec3f {
-  var colors = SPECIES_COLORS;
-  return colors[min(id - 1u, 3u)];
 }
 
 fn shade(albedo: vec3f, n: vec3f, world: vec3f, camPos: vec3f) -> vec3f {

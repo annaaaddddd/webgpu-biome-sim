@@ -16,6 +16,12 @@ struct VSOut {
 @group(0) @binding(2) var moistureTex: texture_2d<f32>;
 @group(0) @binding(3) var stateTex: texture_2d<u32>;
 @group(0) @binding(4) var<uniform> draw: Draw;
+@group(0) @binding(5) var<storage, read> flowers: array<FlowerParams, MAX_SPECIES>;
+
+// debug flower species
+fn speciesColor(id: u32) -> vec3f {
+  return flowers[min(id - 1u, MAX_SPECIES - 1u)].petalColor.rgb;
+}
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> VSOut {
