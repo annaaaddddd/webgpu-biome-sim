@@ -5,24 +5,19 @@ import { device, context, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import {
   GRID,
-  WORLD_SIZE,
-  HEIGHT_SCALE,
   MAX_SPECIES,
   TERRAIN_FORMAT,
   STATE_FORMAT,
   PLANT_INSTANCE_BYTES,
   DRAW_ARGS_BYTES,
-  FLOWER_BUDGET,
   FLOWER_VERTS,
   SKY_COLOR,
-  WATER_LEVEL,
   MSAA_SAMPLES,
 } from '../core/layout';
-import { createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
+import { shaderModule, createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
 import { ErosionSim } from './erosion_sim';
-import commonWgsl from '../shaders/common.wgsl?raw';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
@@ -39,31 +34,15 @@ const SPECIES = [
   [0.6, 0.9, 0.0, 0.7, 0.7, 0.08],
 ];
 
-const prelude = `
-const GRID = ${GRID}u;
-const WORLD_SIZE = ${WORLD_SIZE}f;
-const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
-const WATER_LEVEL = ${WATER_LEVEL}f;
-const SKY = vec3f(${SKY_COLOR.join(', ')});
-const MAX_SPECIES = ${MAX_SPECIES}u;
-${Object.entries(FLOWER_BUDGET)
-  .map(([k, v]) => `const ${k} = ${v}u;`)
-  .join('\n')}
-`;
-
 const B = GPUBufferUsage;
 const T = GPUTextureUsage;
 
-function shader(code: string) {
-  return device.createShaderModule({ code: prelude + commonWgsl + code });
-}
-
 function computePipeline(code: string) {
-  return device.createComputePipeline({ layout: 'auto', compute: { module: shader(code) } });
+  return device.createComputePipeline({ layout: 'auto', compute: { module: shaderModule(code) } });
 }
 
 function renderPipeline(code: string, buffers: GPUVertexBufferLayout[] = []) {
-  const module = shader(code);
+  const module = shaderModule(code);
   return device.createRenderPipeline({
     layout: 'auto',
     vertex: { module, buffers },

@@ -1,7 +1,8 @@
 // Generates the starting terrain and clears the sim state. One thread per texel.
 // The height shaping matches terrain_stub.wgsl so both tracks start from the
-// same kind of map; the fbm here is local until the shared one in common.wgsl
-// can be included.
+// same kind of map
+// Compiled with the shared prelude, so fbm comes from common.wgsl and the same
+// seed gives the same map as the stub terrain.
 
 // Must match the Float32Array in ErosionSim.reset().
 struct Params {
@@ -13,41 +14,6 @@ struct Params {
 @group(0) @binding(2) var fluxOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var velocityOut: texture_storage_2d<rg32float, write>;
 @group(0) @binding(4) var moistureOut: texture_storage_2d<r32float, write>;
-
-// Cheap 2D -> [0,1) hash.
-fn hash(p: vec2f) -> f32 {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-// Value noise: hash the 4 cell corners, blend with a smoothstep curve.
-fn valueNoise(p: vec2f) -> f32 {
-  let i = floor(p);
-  var f = fract(p);
-
-  let n00 = hash(i);
-  let n10 = hash(i + vec2f(1.0, 0.0));
-  let n01 = hash(i + vec2f(0.0, 1.0));
-  let n11 = hash(i + vec2f(1.0, 1.0));
-
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(n00, n10, f.x), mix(n01, n11, f.x), f.y);
-}
-
-// Six octaves: each one doubles frequency and halves amplitude.
-// Divided by the total amplitude so the result stays in [0, 1].
-fn fbm(p: vec2f) -> f32 {
-  var value = 0.0;
-  var totalAmp = 0.0;
-  var amplitude = 1.0;
-  var frequency = 1.0;
-  for (var i = 0; i < 6; i++) {
-    value += amplitude * valueNoise(p * frequency);
-    totalAmp += amplitude;
-    frequency *= 2;
-    amplitude *= 0.5;
-  }
-  return value / totalAmp;
-}
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {

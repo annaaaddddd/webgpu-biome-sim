@@ -2,6 +2,7 @@ import type { GUI } from 'lil-gui';
 import { device } from '../core/device';
 import { GRID, WORLD_SIZE } from '../core/layout';
 import { PassTimer } from './erosion_bench';
+import { shaderModule } from '../core/gpu';
 
 import erosionPassesSrc from '../shaders/erosion/erosion.wgsl?raw';
 import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
@@ -107,15 +108,15 @@ export class ErosionSim {
     // layout: 'auto' infers the bind group layout from the shader.
     this.heightfieldPipeline = device.createComputePipeline({
       layout: 'auto',
-      compute: { module: device.createShaderModule({ code: heightfieldSrc }), entryPoint: 'main' },
+      compute: { module: shaderModule(heightfieldSrc), entryPoint: 'main' },
     });
 
     this.exportPipeline = device.createComputePipeline({
       layout: 'auto',
-      compute: { module: device.createShaderModule({ code: exportSrc }), entryPoint: 'main' },
+      compute: { module: shaderModule(exportSrc), entryPoint: 'main' },
     });
 
-    const erosionModule = device.createShaderModule({ code: erosionPassesSrc });
+    const erosionModule = shaderModule(erosionPassesSrc);
     this.rainPipeline = device.createComputePipeline({
       layout: 'auto',
       compute: { module: erosionModule, entryPoint: 'rain' },
