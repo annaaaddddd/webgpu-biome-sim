@@ -2,7 +2,7 @@ struct SimParams {
   dt: f32,
   rainRate: f32,
   moistureScale: f32,
-  
+
   pipeCoeff: f32,
   cellSize: f32,
 
@@ -16,6 +16,8 @@ struct SimParams {
   talus: f32,       // max height difference (in height units) between neighbors before material slides
   moistureTau: f32, // seconds of sim time for moisture to follow water depth (export pass only)
   frameDt: f32,     // sim time advanced this frame, dt * stepsPerFrame (export pass only)
+  seed: f32,        // offsets the moisture baseline noise, same seed as the terrain (export pass only)
+  baseline: f32,    // weight of the height/noise moisture baseline (export pass only)
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
@@ -170,7 +172,9 @@ fn erodeDeposit(@builtin(global_invocation_id) id: vec3u) {
   if (p.y > 0)          { b_D = textureLoad(stateIn, p + vec2i(0, -1), 0).r; }
   if (p.y < dims.y - 1) { b_U = textureLoad(stateIn, p + vec2i(0,  1), 0).r; }
 
-  let grad = vec2f(b_R - b_L, b_U - b_D) / (2 * sim.cellSize);
+  // Heights are in [0, 1]; HEIGHT_SCALE puts the gradient in world units so
+  // sinAlpha is the real slope rather than a near-constant minSlope.
+  let grad = vec2f(b_R - b_L, b_U - b_D) * HEIGHT_SCALE / (2 * sim.cellSize);
   var sinAlpha = length(grad) / sqrt(1 + dot(grad, grad));
   sinAlpha = max(sinAlpha, sim.minSlope);
 

@@ -95,9 +95,6 @@ export class ErosionTrack implements Track {
     gui.add(this, 'view', { shaded: 0, height: 1, moisture: 2 });
     this.erosionSim.addGui(gui);
 
-    // &steps=N keeps the GPU busy so its clock does not drift during a bench run.
-    const steps = new URLSearchParams(location.search).get('steps');
-    if (steps !== null) this.erosionSim.sim.stepsPerFrame = Number(steps);
     this.erosionSim.bench = PassTimer.fromUrl(ErosionSim.PASS_NAMES, {
       stepPasses: 6, // one sim step; export runs once per frame
       label: `erosion ${GRID}x${GRID}, ${this.erosionSim.sim.stepsPerFrame} steps/frame`,

@@ -18,42 +18,42 @@ export class ErosionSim {
   // Timer slot names; the index is the `slot` passed to dispatch().
   static readonly PASS_NAMES = ['rain', 'flux', 'water', 'erodeDeposit', 'transport', 'thermal', 'export'];
   readonly height: GPUTexture;   // shared output, written by export()
-  readonly moisture: GPUTexture; // shared output, smoothed over time by export()
+  readonly moisture: GPUTexture; // shared output: height/noise baseline + wetTex, written by export()
 
   bench?: PassTimer;
   dirty = true;          // next frame() calls reset() to regenerate the heightfield
   seed = 0;
+
   // Uploaded to SimParams every frame; GUI-tunable via addGui().
   sim = {
     dt: 0.05,        // simulation step, not frame time
     rainRate: 0.02,
     stepsPerFrame: 1,
-    moistureScale: 2.0,
+    moistureScale: 10.0,
     pipeCoeff: 1.0,
     cellSize,
-    Kc: 0.01,
+    Kc: 0.001,
     Ks: 0.3,
     Kd: 0.5,
     Ke: 0.5,
     minSlope: 0.05,
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
-    Kt: 0.5,
-    talus: 0.01,     // height units; heights are in [0,1], so 0.01 is about 43 deg at 18x height scale
+    Kt: 0.05,
+    talus: 0.025,    // height units; heights are in [0,1], so 0.025 is about 66 deg at 18x height scale
     moistureTau: 2.0, // time constant for moisture to follow water depth (see export.wgsl)
+    baseline: 1.0,    // weight of the height/noise moisture baseline; 0 = water only
   };
-
-  heightfieldUniforms!: GPUBuffer;
-  heightfieldPipeline!: GPUComputePipeline;
-  heightfieldBindGroup!: GPUBindGroup;
 
   stateTex!: GPUTexture[];   // b: height, d: water depth, s: sediment
   fluxTex!: GPUTexture[];    // flux to 4 directions: left, right, top, bottom
   velocityTex!: GPUTexture;  // velocity (u, v)
+  wetTex!: GPUTexture;       // EMA of water depth, persists across frames
   stateCur = 0;
   fluxCur = 0;
 
-  exportPipeline!: GPUComputePipeline;
-  exportBindGroups!: GPUBindGroup[];
+  heightfieldUniforms!: GPUBuffer;
+  heightfieldPipeline!: GPUComputePipeline;
+  heightfieldBindGroup!: GPUBindGroup;
 
   simUniforms!: GPUBuffer;
   rainPipeline!: GPUComputePipeline;
@@ -69,9 +69,16 @@ export class ErosionSim {
   thermalPipeline!: GPUComputePipeline;
   thermalBindGroups!: GPUBindGroup[];
 
+  exportPipeline!: GPUComputePipeline;
+  exportBindGroups!: GPUBindGroup[];
+
   constructor(height: GPUTexture, moisture: GPUTexture) {
     this.height = height;
     this.moisture = moisture;
+
+    // &steps=N overrides stepsPerFrame; a bench run uses it to keep the GPU busy.
+    const steps = new URLSearchParams(location.search).get('steps');
+    if (steps !== null) this.sim.stepsPerFrame = Number(steps);
 
     // --- Textures ---
     // Simulation state, ping-ponged between [0] and [1]; stateCur/fluxCur mark
@@ -90,6 +97,12 @@ export class ErosionSim {
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
 
+    this.wetTex = device.createTexture({
+      size: [GRID, GRID],
+      format: 'r32float',
+      usage: GPUTextureUsage.STORAGE_BINDING,
+    });
+
     // --- Buffers ---
     // Params: seed, padded to 16 bytes.
     this.heightfieldUniforms = device.createBuffer({
@@ -97,10 +110,10 @@ export class ErosionSim {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // SimParams in erosion.wgsl and export.wgsl: 14 f32 = 56 bytes, padded to 64.
-    // Grow in 16-byte steps if fields are added.
+    // SimParams in erosion.wgsl and export.wgsl: 16 f32 = 64 bytes, so the
+    // buffer has room for 4 more. Grow in 16-byte steps if fields are added.
     this.simUniforms = device.createBuffer({
-      size: 64,
+      size: 80,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -148,7 +161,7 @@ export class ErosionSim {
     });
 
     // --- Bind groups ---
-    // Writes side 0 of state/flux and clears moisture; reset() sets
+    // Writes side 0 of state/flux and clears wetTex; reset() sets
     // stateCur/fluxCur back to 0 to match.
     this.heightfieldBindGroup = device.createBindGroup({
       layout: this.heightfieldPipeline.getBindGroupLayout(0),
@@ -157,7 +170,7 @@ export class ErosionSim {
         { binding: 1, resource: this.stateTex[this.stateCur].createView() },
         { binding: 2, resource: this.fluxTex[this.fluxCur].createView() },
         { binding: 3, resource: this.velocityTex.createView() },
-        { binding: 4, resource: moisture.createView() },
+        { binding: 4, resource: this.wetTex.createView() },
       ],
     });
 
@@ -169,8 +182,9 @@ export class ErosionSim {
       entries: [
         { binding: 0, resource: this.stateTex[i].createView() },
         { binding: 1, resource: height.createView() },
-        { binding: 2, resource: moisture.createView() },
+        { binding: 2, resource: this.wetTex.createView() },
         { binding: 3, resource: {buffer: this.simUniforms } },
+        { binding: 4, resource: moisture.createView() },
       ],
     }));
 
@@ -240,7 +254,7 @@ export class ErosionSim {
     simFolder.add(this.sim, 'rainRate', 0, 2);
     simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
     simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
-    simFolder.add(this.sim, 'Kc', 0, 2.0);
+    simFolder.add(this.sim, 'Kc', 0, 0.05);
     simFolder.add(this.sim, 'Ks', 0, 1.0);
     simFolder.add(this.sim, 'Kd', 0, 1.0);
     simFolder.add(this.sim, 'Ke', 0, 1);
@@ -248,6 +262,7 @@ export class ErosionSim {
     simFolder.add(this.sim, 'minSlope', 0.01, 0.1);
     simFolder.add(this.sim, 'maxDepth', 0.001, 0.05);
     simFolder.add(this.sim, 'talus', 0.001, 0.05);
+    simFolder.add(this.sim, 'baseline', 0.0, 1.0);
   }
 
   // Bind groups for every (state side s, flux side f) pair, indexed by s * 2 + f.
@@ -278,7 +293,8 @@ export class ErosionSim {
     else this.fluxCur = 1 - this.fluxCur;
   }
 
-  // Copy the current state into the height/moisture textures. Reads only, no flip.
+  // Write height and moisture into the shared textures and update wetTex.
+  // Reads state only, no flip.
   export(encoder: GPUCommandEncoder) {
     this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.stateCur], 6); // 6 = 'export'
   }
@@ -314,6 +330,8 @@ export class ErosionSim {
       this.sim.talus,
       this.sim.moistureTau,
       this.sim.dt * this.sim.stepsPerFrame,
+      this.seed,
+      this.sim.baseline,
     ]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {
