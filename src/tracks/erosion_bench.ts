@@ -1,9 +1,9 @@
 import { device } from '../core/device';
 
 // GPU timing for compute passes, driven by URL params:
-//   ?bench=N      record N samples, then print mean/median/p95 per pass to the
-//                 console and download the raw samples as CSV
+//   ?bench=N      record N samples, then print mean/median/p95 per pass to the console
 //   &warmup=M     skip the first M readings (default 60)
+//   &csv          also download the raw samples as CSV
 // Needs the 'timestamp-query' feature, requested in device.ts when available.
 // Without Chrome's WebGPU developer features flag the timestamps are coarsely
 // quantized and the numbers are not meaningful.
@@ -19,6 +19,7 @@ export interface BenchOptions {
   warmup: number;
   stepPasses: number; // the first N passes make up one sim step; the rest are per-frame
   label: string;      // printed with the table, e.g. "erosion 512x512, 10 steps/frame"
+  csv: boolean;       // download the raw samples when done
   file: string;       // download name for the CSV
 }
 
@@ -35,12 +36,13 @@ export class PassTimer {
   readonly opts: BenchOptions;
 
   // Returns undefined when the URL has no ?bench=N.
-  static fromUrl(names: readonly string[], opts: Omit<BenchOptions, 'samples' | 'warmup'>) {
+  static fromUrl(names: readonly string[], opts: Omit<BenchOptions, 'samples' | 'warmup' | 'csv'>) {
     const query = new URLSearchParams(location.search);
     const samples = Number(query.get('bench') ?? 0);
     if (samples <= 0) return undefined;
     const warmup = Number(query.get('warmup') ?? 60);
-    return new PassTimer(names, { ...opts, samples, warmup });
+    const csv = query.has('csv');
+    return new PassTimer(names, { ...opts, samples, warmup, csv });
   }
 
   constructor(names: readonly string[], opts: BenchOptions) {
@@ -99,14 +101,16 @@ export class PassTimer {
     console.log(`bench: ${this.opts.label}, ${this.samples.length} samples, ms per pass`);
     console.table(rows);
 
-    const csv = [
-      ['sample', ...this.names, 'step'].join(','),
-      ...this.samples.map((f, i) => [i, ...f.map((x) => x.toFixed(4)), step[i].toFixed(4)].join(',')),
-    ].join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    a.download = this.opts.file;
-    a.click();
+    if (this.opts.csv) {
+      const csv = [
+        ['sample', ...this.names, 'step'].join(','),
+        ...this.samples.map((f, i) => [i, ...f.map((x) => x.toFixed(4)), step[i].toFixed(4)].join(',')),
+      ].join('\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = this.opts.file;
+      a.click();
+    }
 
     this.querySet.destroy();
     this.resolveBuf.destroy();

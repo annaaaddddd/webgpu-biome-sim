@@ -72,7 +72,7 @@ GUI: `view` switches between shaded, height and moisture; the Simulation folder 
 
 *Same settings as the timelapse, except moistureScale 25 (default 2) for the moisture view.*
 
-One full sim step takes about 0.12 ms on the GPU at 512 x 512, under 1% of a 60 fps frame. No single pass dominates: water is the slowest at about 20% of the step, and every pass is a full-grid read and write of float textures, so the cost is spread evenly. Timed with `?track=erosion&bench=300&steps=10&warmup=600`, which records GPU timestamps around each pass of the first step in a frame.
+One full sim step takes about 0.12 ms on the GPU at 512 x 512, under 1% of a 60 fps frame. No single pass dominates: water is the slowest at about 20% of the step, and every pass is a full-grid read and write of float textures, so the cost is spread evenly. Timed with `?track=erosion&bench=300&steps=10&warmup=600&csv`, which records GPU timestamps around each pass of the first step in a frame.
 
 ![GPU time per erosion pass](media/erosion/erosion_timing_512.svg)
 
