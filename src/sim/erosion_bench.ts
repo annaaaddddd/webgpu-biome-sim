@@ -30,6 +30,11 @@ export class PassTimer {
   private copied = false;  // resolve + copy was encoded this frame
   private reading = false; // readBuf is mapped or about to be
   private samples: number[][] = [];
+  // A pass the caller skips writes no timestamps, and its query slots keep
+  // whatever an earlier frame left there. Track which slots were written so
+  // a skipped pass reads as 0 ms instead of a stale time.
+  private written = new Set<number>();    // slots timed so far this frame
+  private resolved = new Set<number>();   // slots timed in the frame being read back
   private warmup: number;
   private done = false;
   readonly names: readonly string[];
@@ -59,18 +64,20 @@ export class PassTimer {
   // Timestamp writes for pass `slot` (index into names); undefined when not timing.
   writes(slot?: number): GPUComputePassTimestampWrites | undefined {
     if (this.done || slot === undefined) return undefined;
+    this.written.add(slot);
     return { querySet: this.querySet, beginningOfPassWriteIndex: slot * 2, endOfPassWriteIndex: slot * 2 + 1 };
   }
 
   // Call at the start of a frame. Maps the previous frame's readback, so the
   // buffer is never both a copy target and mapped within one submit.
   beginFrame() {
+    this.written.clear();
     if (this.done || !this.copied || this.reading) return;
     this.copied = false;
     this.reading = true;
     this.readBuf.mapAsync(GPUMapMode.READ).then(() => {
       const t = new BigInt64Array(this.readBuf.getMappedRange());
-      const ms = this.names.map((_, i) => Number(t[i * 2 + 1] - t[i * 2]) / 1e6);
+      const ms = this.names.map((_, i) => (this.resolved.has(i) ? Number(t[i * 2 + 1] - t[i * 2]) / 1e6 : 0));
       this.readBuf.unmap();
       this.reading = false;
 
@@ -87,6 +94,7 @@ export class PassTimer {
     encoder.resolveQuerySet(this.querySet, 0, count, this.resolveBuf, 0);
     encoder.copyBufferToBuffer(this.resolveBuf, 0, this.readBuf, 0, count * 8);
     this.copied = true;
+    this.resolved = new Set(this.written);
   }
 
   private finish() {

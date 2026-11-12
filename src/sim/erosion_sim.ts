@@ -2,6 +2,7 @@ import type { GUI } from 'lil-gui';
 import { device } from '../core/device';
 import { GRID, WORLD_SIZE } from '../core/layout';
 import { PassTimer } from './erosion_bench';
+import { MassProbe } from './erosion_probe';
 import { shaderModule } from '../core/gpu';
 
 import erosionPassesSrc from '../shaders/erosion/erosion.wgsl?raw';
@@ -21,21 +22,24 @@ export class ErosionSim {
   readonly moisture: GPUTexture; // shared output: height/noise baseline + wetTex, written by export()
 
   bench?: PassTimer;
+  probe?: MassProbe;     // ?probe: logs grid totals once a second (see erosion_probe.ts)
   dirty = true;          // next frame() calls reset() to regenerate the heightfield
+  erode = true;          // false freezes the terrain: rain, flow and evaporation keep running
+  erosionSteps = 0;      // sim steps run with erosion on since the last reset; shows the terrain's age
   seed = 0;
 
   // Uploaded to SimParams every frame; GUI-tunable via addGui().
   sim = {
     dt: 0.05,        // simulation step, not frame time
-    rainRate: 0.02,
-    stepsPerFrame: 1,
+    rainRate: 0.0003, // mean water depth settles at rainRate / Ke
+    stepsPerFrame: 2,
     moistureScale: 10.0,
     pipeCoeff: 1.0,
     cellSize,
-    Kc: 0.001,
-    Ks: 0.3,
+    Kc: 0.001,       // sediment capacity
+    Ks: 0.1,
     Kd: 0.5,
-    Ke: 0.5,
+    Ke: 0.03,        // water lasts ~1 / (Ke * dt) steps, long enough to reach the valleys
     minSlope: 0.05,
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
     Kt: 0.05,
@@ -79,6 +83,7 @@ export class ErosionSim {
     // &steps=N overrides stepsPerFrame; a bench run uses it to keep the GPU busy.
     const steps = new URLSearchParams(location.search).get('steps');
     if (steps !== null) this.sim.stepsPerFrame = Number(steps);
+    this.probe = MassProbe.fromUrl(GRID);
 
     // --- Textures ---
     // Simulation state, ping-ponged between [0] and [1]; stateCur/fluxCur mark
@@ -86,7 +91,7 @@ export class ErosionSim {
     const stateAndFluxTexDesc: GPUTextureDescriptor = {
       size: [GRID, GRID],
       format: 'rgba32float',
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
     };
     this.stateTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
     this.fluxTex = [0, 1].map(() => device.createTexture(stateAndFluxTexDesc));
@@ -110,8 +115,8 @@ export class ErosionSim {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // SimParams in erosion.wgsl and export.wgsl: 16 f32 = 64 bytes, so the
-    // buffer has room for 4 more. Grow in 16-byte steps if fields are added.
+    // SimParams in erosion.wgsl and export.wgsl: 17 f32 = 68 bytes, rounded up
+    // to 80 so there is room for 3 more. Grow in 16-byte steps after that.
     this.simUniforms = device.createBuffer({
       size: 80,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -229,7 +234,6 @@ export class ErosionSim {
         { binding: 0, resource: {buffer: this.simUniforms } },
         { binding: 1, resource: this.stateTex[i].createView() },
         { binding: 2, resource: this.stateTex[1-i].createView() },
-        { binding: 6, resource: this.velocityTex.createView() },
       ],
     }));
 
@@ -243,26 +247,42 @@ export class ErosionSim {
     }));
   }
 
-  // `seed` is skipped when the caller already has its own seed control.
+  // `seed` is skipped when the caller already has its own seed control. Such a
+  // caller passes a folder of its own, so the controls go straight into it.
   addGui(gui: GUI, seed = true) {
     if (seed) gui.add(this, 'seed').onChange(() => (this.dirty = true));
 
-    const simFolder = gui.addFolder('Simulation');
-    simFolder.add(this.sim, 'dt', 0.001, 0.2);
-    simFolder.add(this.sim, 'moistureScale', 1, 50);
-    simFolder.add(this.sim, 'moistureTau', 0.1, 20);
-    simFolder.add(this.sim, 'rainRate', 0, 2);
-    simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1);
-    simFolder.add(this.sim, 'pipeCoeff', 0.1, 20);
-    simFolder.add(this.sim, 'Kc', 0, 0.05);
-    simFolder.add(this.sim, 'Ks', 0, 1.0);
-    simFolder.add(this.sim, 'Kd', 0, 1.0);
-    simFolder.add(this.sim, 'Ke', 0, 1);
-    simFolder.add(this.sim, 'Kt', 0, 1);
-    simFolder.add(this.sim, 'minSlope', 0.01, 0.1);
-    simFolder.add(this.sim, 'maxDepth', 0.001, 0.05);
-    simFolder.add(this.sim, 'talus', 0.001, 0.05);
-    simFolder.add(this.sim, 'baseline', 0.0, 1.0);
+    const simFolder = seed ? gui.addFolder('Simulation') : gui;
+    // One button that reads as the action it will take.
+    const toggle = simFolder.add({ toggle: () => {
+      this.erode = !this.erode;
+      toggle.name(this.erode ? 'pause erosion' : 'start erosion');
+    } }, 'toggle').name(this.erode ? 'pause erosion' : 'start erosion');
+    simFolder.add(this, 'erosionSteps').name('steps eroded').listen().disable();
+
+    // Labels say what a control does; the symbol from the papers and the
+    // shader stays in brackets so the two can be matched up.
+    simFolder.add(this.sim, 'stepsPerFrame', 0, 20).step(1).name('steps per frame');
+    simFolder.add(this.sim, 'dt', 0.001, 0.2).name('time step (dt)');
+    simFolder.add(this.sim, 'rainRate', 0, 0.005).name('rain rate');
+    simFolder.add(this.sim, 'Ke', 0, 0.2).name('evaporation (Ke)');
+    simFolder.add(this.sim, 'pipeCoeff', 0.1, 20).name('flow speed');
+
+    const hydraulic = simFolder.addFolder('Hydraulic erosion').close();
+    hydraulic.add(this.sim, 'Kc', 0, 0.005).name('capacity (Kc)');
+    hydraulic.add(this.sim, 'Ks', 0, 1.0).name('pick-up rate (Ks)');
+    hydraulic.add(this.sim, 'Kd', 0, 1.0).name('drop rate (Kd)');
+    hydraulic.add(this.sim, 'minSlope', 0.01, 0.1).name('min slope');
+    hydraulic.add(this.sim, 'maxDepth', 0.001, 0.05).name('full-strength depth');
+
+    const thermal = simFolder.addFolder('Thermal erosion').close();
+    thermal.add(this.sim, 'Kt', 0, 1).name('slide rate (Kt)');
+    thermal.add(this.sim, 'talus', 0.001, 0.05).name('max step (talus)');
+
+    const moisture = simFolder.addFolder('Moisture').close();
+    moisture.add(this.sim, 'moistureScale', 1, 50).name('water weight');
+    moisture.add(this.sim, 'moistureTau', 0.1, 20).name('lag (sim s)');
+    moisture.add(this.sim, 'baseline', 0.0, 1.0).name('terrain baseline');
   }
 
   // Bind groups for every (state side s, flux side f) pair, indexed by s * 2 + f.
@@ -306,6 +326,7 @@ export class ErosionSim {
     device.queue.writeBuffer(this.heightfieldUniforms, 0, new Float32Array([this.seed]));
     this.dispatch(encoder, this.heightfieldPipeline, this.heightfieldBindGroup);
     this.dirty = false;
+    this.erosionSteps = 0;
   }
 
   // Encode this frame's sim steps plus one export. Call once per frame.
@@ -340,11 +361,15 @@ export class ErosionSim {
       this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state', slot(0));
       this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux', slot(1));
       this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state', slot(2));
-      this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state', slot(3));
+      // Erosion works on geological time and the ecosystem on seasons, so the
+      // terrain is shaped first and then frozen; the water passes carry on.
+      if (this.erode) this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state', slot(3));
       this.step(encoder, this.transportPipeline, this.transportBindGroups[this.stateCur], 'state', slot(4));
-      this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state', slot(5));
+      if (this.erode) this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state', slot(5));
+      if (this.erode) this.erosionSteps++;
     }
     this.export(encoder);
+    this.probe?.frame(encoder, this.stateTex[this.stateCur]);
 
     if (this.sim.stepsPerFrame > 0) this.bench?.endFrame(encoder);
   }

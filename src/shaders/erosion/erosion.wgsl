@@ -51,6 +51,14 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
   let h = me.r + me.g;           // water level
   var f = textureLoad(fluxIn, p, 0);             // old 4 flux
 
+  // Open edges: past the boundary the neighbor is the sea, a cell whose water
+  // surface always sits at WATER_LEVEL. Water that crosses the boundary takes
+  // its sediment off the map (see water()); with closed edges nothing could
+  // leave, so every basin silted up. Where the edge is dry land the neighbor
+  // is level ground instead, so the map does not end in a cliff that the
+  // runoff would carve back into the terrain.
+  let hSea = max(WATER_LEVEL, me.r);
+
   // left flux
   let ql = vec2i(id.xy) + vec2i(-1, 0);
   if (all(ql >= vec2i(0)) && all(ql < dims)) {
@@ -59,7 +67,7 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
     f.r = max(0, f.r + sim.dt * sim.pipeCoeff * dh);
   }
   else {
-    f.r = 0;
+    f.r = max(0, f.r + sim.dt * sim.pipeCoeff * (h - hSea));
   }
 
   // right flux
@@ -70,7 +78,7 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
     f.g = max(0, f.g + sim.dt * sim.pipeCoeff * dh);
   }
   else {
-    f.g = 0;
+    f.g = max(0, f.g + sim.dt * sim.pipeCoeff * (h - hSea));
   }
 
   // top flux
@@ -81,7 +89,7 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
     f.b = max(0, f.b + sim.dt * sim.pipeCoeff * dh);
   }
   else {
-    f.b = 0;
+    f.b = max(0, f.b + sim.dt * sim.pipeCoeff * (h - hSea));
   }
 
   // bottom flux
@@ -92,7 +100,7 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
     f.a = max(0, f.a + sim.dt * sim.pipeCoeff * dh);
   }
   else {
-    f.a = 0;
+    f.a = max(0, f.a + sim.dt * sim.pipeCoeff * (h - hSea));
   }
 
   let total = f.r + f.g + f.b + f.a;
@@ -102,6 +110,14 @@ fn flux(@builtin(global_invocation_id) id: vec3u) {
   }
 
   textureStore(fluxOut, p, f);
+}
+
+// Sediment that neighbor q sends to us through a pipe moving `flow` (volume
+// per sim second): its concentration times the volume. See water().
+fn carried(q: vec2i, flow: f32, area: f32) -> f32 {
+  let nb = textureLoad(stateIn, q, 0);
+  if (nb.g <= 1e-6 || flow <= 0) { return 0.0; }
+  return nb.b * min(flow * sim.dt / (area * nb.g), 1.0);
 }
 
 @compute @workgroup_size(8, 8)
@@ -114,7 +130,7 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
   let f = textureLoad(fluxIn, p, 0);
 
   // Inflow from each side = that neighbor's outflow in the opposite direction.
-  // No neighbor past the boundary -> no inflow.
+  // The sea past the boundary has no flux texel; it tops edge cells up below.
   var in_L = 0.0;  // -x neighbor's +x outflow (.g)
   var in_R = 0.0;  // +x neighbor's -x outflow (.r)
   var in_D = 0.0;  // -y neighbor's +y outflow (.a)
@@ -126,8 +142,30 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
 
   let inSum  = in_L + in_R + in_D + in_U;
   let outSum = f.r + f.g + f.b + f.a;
+  let area = sim.cellSize * sim.cellSize;
   let dV = sim.dt * (inSum - outSum);
-  let d2 = max(0, me.g + dV / (sim.cellSize * sim.cellSize));
+  var d2 = max(0, me.g + dV / area);
+
+  // The sea flows back in: an edge cell never has its water surface below
+  // WATER_LEVEL. Sea water carries no sediment, so s is untouched.
+  if (p.x == 0 || p.y == 0 || p.x == dims.x - 1 || p.y == dims.y - 1) {
+    d2 = max(d2, WATER_LEVEL - me.r);
+  }
+
+  // Sediment rides with the water: each pipe carries the sending cell's
+  // concentration (s / d) times the volume it moves. flux() already scaled
+  // the outflows so outSum * dt <= d * area, so a cell never sends more than
+  // it holds, and what leaves one cell arrives in its neighbor. Inside the
+  // grid that conserves the total; outSum also counts the pipes into the sea,
+  // so sediment in water that crosses the boundary is gone. The
+  // semi-Lagrangian advection this replaces dropped whatever flowed into
+  // cells where the water stops, which drained the map.
+  var s2 = me.b;
+  if (me.g > 1e-6) { s2 -= me.b * min(outSum * sim.dt / (area * me.g), 1.0); }
+  if (p.x > 0)          { s2 += carried(p + vec2i(-1, 0), in_L, area); }
+  if (p.x < dims.x - 1) { s2 += carried(p + vec2i( 1, 0), in_R, area); }
+  if (p.y > 0)          { s2 += carried(p + vec2i(0, -1), in_D, area); }
+  if (p.y < dims.y - 1) { s2 += carried(p + vec2i(0,  1), in_U, area); }
 
   let dBar = (me.g + d2) / 2;
   var u = 0.0;
@@ -146,7 +184,7 @@ fn water(@builtin(global_invocation_id) id: vec3u) {
     v *= maxSpeed / speed;
   }
 
-  textureStore(stateOut, p, vec4f(me.r, d2, me.b, 0));
+  textureStore(stateOut, p, vec4f(me.r, d2, s2, 0));
   textureStore(velocityOut, p, vec4f(u, v, 0, 0));
 }
 
@@ -162,7 +200,7 @@ fn erodeDeposit(@builtin(global_invocation_id) id: vec3u) {
 
   // Neighbor terrain heights for the slope. Past the boundary there is no
   // neighbor, so use our own height: that side contributes zero slope
-  // (compare water(), where "no neighbor" means zero inflow instead).
+  // (compare flux(), where past the boundary is the sea).
   var b_L = me.r;
   var b_R = me.r;
   var b_D = me.r;
@@ -208,24 +246,10 @@ fn transport(@builtin(global_invocation_id) id: vec3u) {
   let p = vec2i(id.xy);
   if (any(p >= dims)) { return; }
 
+  // Sediment moves with the water in water(); this pass only evaporates.
   let me = textureLoad(stateIn, p, 0);
-  let vel = textureLoad(velocityIn, p, 0).xy;
-
-  var src = vec2f(p) - vel * sim.dt / sim.cellSize;
-  src = clamp(src, vec2f(0), vec2f(dims - 1));
-
-  let i0 = vec2i(floor(src));
-  let i1 = min(i0 + 1, dims - 1);
-  let f = fract(src);
-  let s00 = textureLoad(stateIn, i0, 0).b;
-  let s10 = textureLoad(stateIn, vec2i(i1.x, i0.y), 0).b;
-  let s01 = textureLoad(stateIn, vec2i(i0.x, i1.y), 0).b;
-  let s11 = textureLoad(stateIn, i1, 0).b;
-  let s = mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
-
   let d = me.g * (1 - sim.Ke * sim.dt);
-
-  textureStore(stateOut, p, vec4f(me.r, d, s, 0));
+  textureStore(stateOut, p, vec4f(me.r, d, me.b, 0));
 }
 
 @compute @workgroup_size(8, 8)
