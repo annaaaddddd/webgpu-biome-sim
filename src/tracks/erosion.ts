@@ -3,6 +3,7 @@ import type { Track } from '../core/track';
 import { device, context, canvas, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import { GRID, WORLD_SIZE, HEIGHT_SCALE } from '../core/layout';
+import { PassTimer } from './erosion_bench';
 
 import heightfieldSrc from '../shaders/erosion/heightfield.wgsl?raw';
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
@@ -51,6 +52,10 @@ export class ErosionTrack implements Track {
   transportBindGroups!: GPUBindGroup[];
   thermalPipeline!: GPUComputePipeline;
   thermalBindGroups!: GPUBindGroup[];
+
+  // Pass timing for ?track=erosion&bench=N (see erosion_bench.ts). Slots index this list.
+  static readonly PASS_NAMES = ['rain', 'flux', 'water', 'erodeDeposit', 'transport', 'thermal', 'export'];
+  bench?: PassTimer;
 
   // --- GUI params ---
   frequency = 4;
@@ -312,6 +317,15 @@ export class ErosionTrack implements Track {
     simFolder.add(this.sim, 'maxDepth', 0.001, 0.05);
     simFolder.add(this.sim, 'talus', 0.001, 0.05);
 
+    // &steps=N keeps the GPU busy so its clock does not drift during a bench run.
+    const steps = new URLSearchParams(location.search).get('steps');
+    if (steps !== null) this.sim.stepsPerFrame = Number(steps);
+    this.bench = PassTimer.fromUrl(ErosionTrack.PASS_NAMES, {
+      stepPasses: 6, // one sim step; export runs once per frame
+      label: `erosion ${GRID}x${GRID}, ${this.sim.stepsPerFrame} steps/frame`,
+      file: `erosion_timing_${GRID}.csv`,
+    });
+
     // --- Initial state ---
     this.generateHeightfield();
   }
@@ -325,8 +339,9 @@ export class ErosionTrack implements Track {
 
   // One full-grid compute pass: one thread per texel, 8x8 workgroups
   // (matches @workgroup_size in the shaders).
-  dispatch(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup) {
-    const pass = encoder.beginComputePass();
+  // `slot` (index into PASS_NAMES) times the pass when a bench run is active.
+  dispatch(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, slot?: number) {
+    const pass = encoder.beginComputePass({ timestampWrites: this.bench?.writes(slot) });
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(Math.ceil(GRID / 8), Math.ceil(GRID / 8));
@@ -334,8 +349,8 @@ export class ErosionTrack implements Track {
   }
 
   // A simulation pass: reads side `cur`, writes the other side, then flips.
-  step(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, which: 'state' | 'flux') {
-    this.dispatch(encoder, pipeline, bindGroup);
+  step(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, which: 'state' | 'flux', slot?: number) {
+    this.dispatch(encoder, pipeline, bindGroup, slot);
 
     if (which === 'state') this.stateCur = 1 - this.stateCur;
     else this.fluxCur = 1 - this.fluxCur;
@@ -354,10 +369,12 @@ export class ErosionTrack implements Track {
 
   // Copy the current state into the height/moisture textures. Reads only, no flip.
   export(encoder: GPUCommandEncoder) {
-    this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.stateCur]);
+    this.dispatch(encoder, this.exportPipeline, this.exportBindGroups[this.stateCur], 6);
   }
 
   frame(encoder: GPUCommandEncoder, _dt: number) {
+    this.bench?.beginFrame();
+
     // Depth texture must match the canvas size; rebuild it after a resize.
     if (!this.depthTex || this.depthTex.width !== canvas.width || this.depthTex.height !== canvas.height) {
       this.depthTex?.destroy();
@@ -386,14 +403,18 @@ export class ErosionTrack implements Track {
     ]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {
-      this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state');
-      this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux');
-      this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state');
-      this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state');
-      this.step(encoder, this.transportPipeline, this.transportBindGroups[this.stateCur], 'state');
-      this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state');
+      // Only the first step of the frame is timed, so later steps do not overwrite it.
+      const slot = (k: number) => (i === 0 ? k : undefined);
+      this.step(encoder, this.rainPipeline, this.rainBindGroups[this.stateCur], 'state', slot(0));
+      this.step(encoder, this.fluxPipeline, this.fluxBindGroups[this.stateCur * 2 + this.fluxCur], 'flux', slot(1));
+      this.step(encoder, this.waterPipeline, this.waterBindGroups[this.stateCur * 2 + this.fluxCur], 'state', slot(2));
+      this.step(encoder, this.erodeDepositPipeline, this.erodeDepositBindGroups[this.stateCur], 'state', slot(3));
+      this.step(encoder, this.transportPipeline, this.transportBindGroups[this.stateCur], 'state', slot(4));
+      this.step(encoder, this.thermalPipeline, this.thermalBindGroups[this.stateCur], 'state', slot(5));
     }
     this.export(encoder);
+
+    if (this.sim.stepsPerFrame > 0) this.bench?.endFrame(encoder);
 
     const pass = encoder.beginRenderPass({
       colorAttachments: [{

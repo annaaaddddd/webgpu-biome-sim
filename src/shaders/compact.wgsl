@@ -2,11 +2,10 @@
 // doubles as the atomic counter.
 
 struct DrawArgs {
-  indexCount: u32,
+  vertexCount: u32,
   instanceCount: atomic<u32>,
-  firstIndex: u32,
-  baseVertex: u32,
-  firstInstance: u32,
+  firstVertex: u32,
+  firstInstance: u32
 }
 
 @group(0) @binding(0) var heightTex: texture_2d<f32>;

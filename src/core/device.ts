@@ -13,7 +13,9 @@ export async function initWebGPU(canvasId = 'mainCanvas') {
     throw new Error('No WebGPU adapter found');
   }
 
-  device = await adapter.requestDevice();
+  // tracks time individual passes on the GPU
+  const requiredFeatures: GPUFeatureName[] = adapter.features.has('timestamp-query') ? ['timestamp-query'] : [];
+  device = await adapter.requestDevice({ requiredFeatures });
   device.addEventListener('uncapturederror', (e) => console.error(e.error.message));
   device.lost.then((info) => {
     console.error(`WebGPU device lost: ${info.message}`);

@@ -22,6 +22,33 @@ export const PLANT_INSTANCE_BYTES = 32;
 // indexCount, instanceCount (filled by the compact pass), firstIndex, baseVertex, firstInstance
 export const DRAW_ARGS_BYTES = 20;
 
+// per flower/plant vertex data, quads per part.
+export const FLOWER_BUDGET = {
+  STEM_U: 6, // number of stem segments
+  STEM_V: 5, // number of stem sides
+  LEAF_U: 4,
+  LEAF_V: 2,
+  MAX_LEAVES: 4,
+  PETAL_U: 4,
+  PETAL_V: 2,
+  MAX_PETALS: 12,
+  CTR_U: 3,
+  CTR_V: 8
+};
+
+const fb = FLOWER_BUDGET;
+export const FLOWER_VERTS = 6 *
+(
+  fb.STEM_U * fb.STEM_V +
+  fb.LEAF_U * fb.LEAF_V * fb.MAX_LEAVES +
+  fb.PETAL_U * fb.PETAL_V * fb.MAX_PETALS +
+  fb.CTR_U * fb.CTR_V
+);
+
+// size of FlowerParams struct in common.wgsl
+export const FLOWER_PARAMS_BYTES = 112;
+
+// default per-species plant colors
 export const SPECIES_COLORS = [
   [0.95, 0.33, 0.38],
   [0.98, 0.8, 0.25],
