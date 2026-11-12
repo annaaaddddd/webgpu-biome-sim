@@ -3,10 +3,10 @@ import type { Track } from '../core/track';
 import { device, context, canvas, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import { GRID, WORLD_SIZE, HEIGHT_SCALE } from '../core/layout';
-import { PassTimer } from './erosion_bench';
+import { PassTimer } from '../sim/erosion_bench';
 
 import terrainSrc from '../shaders/erosion/terrain.wgsl?raw';
-import { ErosionSim } from './erosion_sim';
+import { ErosionSim } from '../sim/erosion_sim';
 
 // Two triangles per grid cell.
 const indexCount = (GRID - 1) * (GRID - 1) * 6;

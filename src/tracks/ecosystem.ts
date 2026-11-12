@@ -17,7 +17,7 @@ import {
 import { shaderModule, createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
-import { ErosionSim } from './erosion_sim';
+import { ErosionSim } from '../sim/erosion_sim';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
