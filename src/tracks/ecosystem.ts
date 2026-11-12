@@ -18,6 +18,7 @@ import { shaderModule, createBuffer, createGridTexture, createBindGroup, dispatc
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
 import { ErosionSim } from '../sim/erosion_sim';
+import { Rain } from '../sim/rain';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
@@ -89,7 +90,9 @@ export class EcosystemTrack implements Track {
 
   private terrainIndexCount = (GRID - 1) * (GRID - 1) * 6;
   private terrainIndexBuffer = createBuffer(B.INDEX, terrainIndices(GRID));
-  
+
+  private rain = new Rain(this.height);
+
   // Use per-species flower shape (created before bind groups use buffer)
   private flowers = new Flowers();
 
@@ -126,9 +129,9 @@ export class EcosystemTrack implements Track {
     { buffer: this.flowers.buffer }
   ]);
   private plantsBindGroup = createBindGroup(
-    this.plantsPipeline, 
+    this.plantsPipeline,
     [
-      { buffer: camera.uniformBuffer }, 
+      { buffer: camera.uniformBuffer },
       { buffer: this.instances },
       { buffer: this.flowers.buffer }
     ]
@@ -150,14 +153,18 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+
     this.flowers.addGui(gui);
-    this.erosion.addGui(gui.addFolder('Erosion'), false);
+    const erosionFolder = gui.addFolder('Erosion');
+    this.erosion.addGui(erosionFolder, false);
+    this.rain.addGui(erosionFolder);
   }
 
   frame(encoder: GPUCommandEncoder, dt: number) {
     this.targets.update();
     if (this.terrainDirty) this.generateTerrain(encoder);
     if (!this.useStub) this.erosion.frame(encoder);
+    this.rain.update(dt, this.erosion.sim.rainRate);
     if (this.stateDirty || this.takeStep(dt)) this.step(encoder);
     this.compact(encoder);
     this.draw(encoder);
@@ -231,6 +238,7 @@ export class EcosystemTrack implements Track {
       pass.setBindGroup(0, this.plantsBindGroup);
       pass.drawIndirect(this.drawArgs, 0);
     }
+    this.rain.draw(pass);
     pass.end();
   }
 }
