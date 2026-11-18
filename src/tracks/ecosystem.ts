@@ -66,8 +66,13 @@ export class EcosystemTrack implements Track {
     stepsPerSecond: 10,
     view: 'shaded',
     showPlants: true,
+    freezeCulling: false
   };
 
+  private cullCamera = createBuffer(B.UNIFORM | B.COPY_DST, 80);
+  // animation in compact.wgsl: stepPhase (f32), lifespan (u32), padded to 16 bytes
+  private animData = new ArrayBuffer(16);
+  private animParams = createBuffer(B.UNIFORM | B.COPY_DST, 16);
   private terrainDirty = true;
   private stateDirty = true;
   private stepIndex = 0;
@@ -120,7 +125,10 @@ export class EcosystemTrack implements Track {
     this.height.createView(),
     this.state.createView(),
     { buffer: this.instances },
-    { buffer: this.drawArgs },
+    { buffer: this.drawArgs }, 
+    { buffer: this.cullCamera },
+    { buffer: this.flowers.buffer },
+    { buffer: this.animParams }
   ]);
   private terrainBindGroup = createBindGroup(this.terrainPipeline, [
     { buffer: camera.uniformBuffer },
@@ -155,6 +163,7 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+    gui.add(this.settings, 'freezeCulling');
 
     this.flowers.addGui(gui);
     const erosionFolder = gui.addFolder('Erosion');
@@ -209,6 +218,16 @@ export class EcosystemTrack implements Track {
 
   private compact(encoder: GPUCommandEncoder) {
     device.queue.writeBuffer(this.drawArgs, 0, new Uint32Array([FLOWER_VERTS,0, 0, 0]));
+    // stepBudget = how far toward next step
+    // important for moosth growth/wilting
+    new Float32Array(this.animData)[0] = Math.min(this.stepBudget, 1);
+    new Uint32Array(this.animData)[1] = this.settings.lifespan;
+
+    device.queue.writeBuffer(this.animParams, 0, this.animData);
+    
+    if (!this.settings.freezeCulling) {
+      encoder.copyBufferToBuffer(camera.uniformBuffer, 0, this.cullCamera, 0, 80);
+    }
     dispatchGrid(encoder, this.compactPipeline, this.compactBindGroup, GRID);
   }
 

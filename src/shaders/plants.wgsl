@@ -8,6 +8,10 @@ struct VSOut {
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) color: vec3f,
+  @location(3) uv: vec2f, // patch coordinates (x: bottom to tip, y: breadth)
+  @location(4) @interpolate(flat) part: u32, // which part of plant
+  @location(5) @interpolate(flat) variation: f32, // random val per petal
+  @location(6) wilt: f32
 }
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -17,6 +21,7 @@ struct VSOut {
 const PI = 3.14159265;
 const TAU = 6.2831853;
 const GOLDEN_ANGLE = 2.3999632;
+const WILT_BROWN = vec3f(0.36, 0.26, 0.14);
 
 // quads per part
 const STEM_Q = STEM_U * STEM_V;
@@ -89,6 +94,25 @@ fn partEnabled(p: FlowerParams, pv: PartVertex) -> bool {
   return (p.flags & F_CENTER) != 0u;
 }
 
+// find the smallest on-screen size of a part before it is culled
+// Saves some rasterization and pixel work (but vertex work stays same)
+fn partVisible(p: FlowerParams, kind: u32, pixelsPerUnit: f32) -> bool {
+  var extent = p.stemHeight;
+  var minPixels = 0.0;
+  if (kind == PART_LEAF) {
+    extent = p.leafLength;
+    minPixels = 3.0;
+  } else if (kind == PART_PETAL) {
+    extent = p.petalLength;
+    minPixels = 1.5;
+  } else if (kind == PART_CENTER) {
+    extent = 2.0 * p.centerRadius;
+    minPixels = 1.0;
+  }
+  
+  return extent * pixelsPerUnit >= minPixels;
+}
+
 fn partColor(p: FlowerParams, kind: u32) -> vec3f {
   if (kind == PART_PETAL) {
     return p.petalColor.rgb;
@@ -97,6 +121,11 @@ fn partColor(p: FlowerParams, kind: u32) -> vec3f {
     return p.centerColor.rgb;
   }
   return p.stemColor.rgb;
+}
+
+// petal wilt: seed is plant's rotation
+fn petalFallen(seed: u32, i: u32, wilt: f32) -> bool {
+  return wilt > mix(0.3, 0.95, rand3(vec3u(seed, i, 0x7e7au)).x);
 }
 
 // SURFACE FUNCTIONS: In "flower space", y is up and base is at the flower's origin.
@@ -115,6 +144,13 @@ fn rotY(a: f32) -> mat3x3f {
 fn spine(p: FlowerParams, t: f32) -> vec3f {
   return vec3f(p. stemBend * t * t, 
   t * p.stemHeight, 0.0);
+}
+
+// Fix "head" positioning issue (top of flower not following stem curve)
+fn headFrame(p: FlowerParams) -> mat3x3f {
+  let up = normalize(vec3f(2.0 * p.stemBend, p.stemHeight, 0.0));
+  let side = vec3f(up.y, -up.x, 0.0); 
+  return mat3x3f(side, up, vec3f(0.0, 0.0, 1.0));
 }
 
 // stem tapering (u moves along the stem while v moves around it)
@@ -141,9 +177,9 @@ fn leafPos(p: FlowerParams, i: u32, uv: vec2f) -> vec3f {
 }
 
 // Petals crown the head
-// need to fix rotation to follow stem bend
-fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
-  let tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
+fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32, wilt: f32) -> vec3f {
+  var tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
+  tilt = mix(tilt, -0.9, wilt * wilt); // wilting petals sag below horizontal
   let dir = vec3f(cos(tilt), sin(tilt), 0.0);
   let up = vec3f(-sin(tilt), cos(tilt), 0.0);
   let halfW = 0.5 * p.petalWidth * sin(PI * pow(uv.x, 0.6));
@@ -156,12 +192,10 @@ fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
   
   let yaw = f32(i) * TAU / f32(max(p.petalCount, 1u));
 
-  return spine(p, 1.0) + rotY(yaw) * local;
+  return spine(p, 1.0) + headFrame(p) * rotY(yaw) * local;
 }
 
 // Flat-ish dome on top of stem
-// currently doesn't follow stem bend
-// both center and petals are currently oriented globally
 fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
   let th = uv.x * 0.5 * PI;
   let ph = uv.y * TAU;
@@ -171,10 +205,10 @@ fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
     sin(th) * sin(ph)
   );
 
-  return spine(p, 1.0) + local;
+  return spine(p, 1.0) + headFrame(p) * local;
 }
 
-fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
+fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32, wilt: f32) -> vec3f {
   if (pv.kind == PART_STEM) {
     return stemPos(p, uv);
   }
@@ -182,7 +216,7 @@ fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
     return leafPos(p, pv.index, uv);
   }
   if (pv.kind == PART_PETAL) {
-    return petalPos(p, pv.index, uv, open);
+    return petalPos(p, pv.index, uv, open, wilt);
   }
   return centerPos(p, uv);
 }
@@ -192,42 +226,111 @@ fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
   let inst = instances[ii];
-  let fp = flowers[min(inst.species - 1u, MAX_SPECIES - 1u)];
   let pv = decode(vi);
+  let open = inst.open;
+  let wilt = inst.wilt;
+  let size = inst.size; // already includes growth, viability, wilt shrink and cull fade
+
+  // wilting wil change local copy of species shape
+  // flower droops, stem bends, leaves wilt
+  var fp = flowers[min(inst.species - 1u, MAX_SPECIES - 1u)];
+  fp.stemBend += 0.5 * fp.stemHeight * wilt * wilt;
+  fp.leafDroop += 0.3 * wilt;
+  fp.centerRadius *= 1.0 - 0.3 * wilt;
+  
+  // per-part culling
+  let pixelsPerUnit = size * cam.pixelScale / max(distance(inst.pos, cam.pos), 1e-3);
 
   var out: VSOut;
-  if (!partEnabled(fp, pv)) {
-    out.clip = vec4f(2.0, 2.0, 2.0, 1.0); // vertex of part goes here to zero
+  let fallen = pv.kind == PART_PETAL 
+              && petalFallen(bitcast<u32>(inst.rotation), pv.index, wilt);
+  if (!partEnabled(fp, pv) || !partVisible(fp, pv.kind, pixelsPerUnit) || fallen) {
+    out.clip = vec4f(2.0, 2.0, 2.0, 1.0); // all vertices of plant go to designated "zero" area
     return out;
   }
-
-  let open = smoothstep(2.0, 10.0, inst.age);
-  let size = smoothstep(0.0, 4.0, inst.age) * (0.6 + 0.6 * inst.viability);
 
   // compute normal from the surface differences; new parts need position dunction
   let e = 2e-3;
   let uvn = clamp(pv.uv, vec2f(0.02), vec2f(0.98));
-  let p0 = partPos(pv, fp, uvn, open);
-  let du = partPos(pv, fp, uvn + vec2f(e, 0.0), open) - p0;
-  let dv = partPos(pv, fp, uvn + vec2f(0.0, e), open) - p0;
+  let p0 = partPos(pv, fp, uvn, open, wilt);
+  let du = partPos(pv, fp, uvn + vec2f(e, 0.0), open, wilt) - p0;
+  let dv = partPos(pv, fp, uvn + vec2f(0.0, e), open, wilt) - p0;
 
   let c = cross(dv, du);
   let n = select(vec3f(0.0, 1.0, 0.0), normalize(c), dot(c, c) > 1e-24);
 
   let rot = rotY(inst.rotation);
-  out.world = inst.pos + rot * partPos(pv, fp, pv.uv, open) * size;
+  out.world = inst.pos + rot * partPos(pv, fp, pv.uv, open, wilt) * size;
   out.normal = rot * n;
-  out.color = partColor(fp, pv.kind);
+  
+  // browns as it wilts, petals will brown faster than the stem
+  let brown = smoothstep(0.15, 0.85, wilt) * select(0.6, 0.9, pv.kind == PART_PETAL)
+  ;
+  out.color = mix(partColor(fp, pv.kind), WILT_BROWN, brown);
+  out.uv = pv.uv;
+  out.part = pv.kind;
+  out.variation = rand3(vec3u(bitcast<u32>(inst.rotation), pv.index, 0x51u)).x;
+  out.wilt = wilt;
   out.clip = cam.viewProj * vec4f(out.world, 1.0);
   return out;
+}
+
+// More rigorous petal shading
+// soft rim and darkening where petals overlap; thin effect because petals are mostly backlit or at grazing angles
+fn shadePetal(in: VSOut, n: vec3f, toCamera: vec3f) -> vec3f {
+  let u = in.uv.x; // 0 center, 1 tip
+  let x = 2.0 * in.uv.y - 1.0; // -1 to 1 across petal and 0 at middle
+
+  // Albedo coloring (deeper color toward base, paler toward tip, slight hue jittering per petal for randomness)
+  var albedo = in.color * mix(0.9, 1.1, in.variation);
+  albedo = mix(albedo * vec3f(0.75, 0.6, 0.45), albedo, smoothstep(0.0, 0.35, u));
+  albedo = mix(albedo, albedo * 0.6 + 0.4, smoothstep(0.7, 1.0, u) * 0.35);
+
+  // petal "veins"
+  let veins = abs(sin(x * PI * 3.5));
+  let vein = (1.0 - smoothstep(0.0, 0.12, veins)) *
+            (1.0 - smoothstep(0.3, 0.95, u));
+  albedo *= 1.0 - 0.18 * vein;
+
+  // diffuse: thin petals don't go to black
+  let ndl = dot(n, SUN_DIR);
+  let wrap = 0.35;
+  let diffuse = max((ndl + wrap) / (1.0 + wrap), 0.0) * SUN_COLOR;
+
+  // transmission
+  // thin edges/tip, more "glow", veins block some light
+  let thinness = mix(0.6, 1.0, max(abs(x), u));
+  let backLit = max(-ndl, 0.0);
+  let towardSun = pow(max(dot(-toCamera, SUN_DIR), 0.0), 3.0);
+  let transmit = (0.55 * backLit + 0.6 * towardSun) 
+                  * thinness * (1.0 - 0.5 * vein);
+  let transmitted = transmit * SUN_COLOR * albedo * albedo * 1.6; // squared albedo for better glow saturation
+
+  // slight petal sheen
+  let rim = pow(1.0 - max(dot(n, toCamera), 0.0), 3.0) * 0.18;
+
+  // petal overlap areas block some light
+  let occlusion = mix(0.5, 1.0, smoothstep(0.0, 0.3, u));
+
+  var color = albedo * (diffuse + ambientLight(n)) * occlusion + transmitted + rim * albedo;
+
+  // petal wilt means less transmission and duller overall
+  color = mix(color, albedo * (diffuse + ambientLight(n)) * occlusion * 0.8, in.wilt);
+
+  return color;
 }
 
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   // light the side of the petal/leaf that faces the camera
+  let toCamera = normalize(cam.pos - in.world);
   var n = normalize(in.normal);
   if (dot(n, cam.pos - in.world) < 0.0) {
     n = -n;
+  }
+
+  if (in.part == PART_PETAL) {
+    return vec4(gamma(applyFog(shadePetal(in, n, toCamera), in.world, cam.pos)), 1.0);
   }
   return vec4f(gamma(shade(in.color, n, in.world, cam.pos)), 1.0);
 }

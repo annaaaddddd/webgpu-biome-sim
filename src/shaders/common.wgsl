@@ -4,15 +4,63 @@
 struct Camera {
   viewProj: mat4x4f,
   pos: vec3f,
+  pixelScale: f32 // canvas.height / (2tan(fov / 2)), pixels per world unit
 }
 
 struct PlantInstance {
   pos: vec3f,
   species: u32,
   rotation: f32,
-  age: f32,
-  viability: f32,
-  _pad: f32,
+  size: f32, // growth, viability, wilt shrink cull fade affects draw scale
+  open: f32, // 0 -> 1: budding -> fully opened
+  wilt: f32 // 0 -> 1: healthy -> dying
+}
+
+// plant lifecycle (ecosystem controls when plant dies, compact controls look)
+// state.a has per-plant seed, then the wilt is a countdown in steps
+// 0: not wilting
+// timing is then a fraction of the plant's lifespan:
+// jittered per plant, hashed cell with seed, allows for more sprouting/blooming/wilting randomization
+const MAX_WILT_STEPS = 15u; // 4 bit countdown
+
+struct Lifecycle {
+  life: f32, // lifespan in steps
+  growSteps: f32, // sprout to full size
+  bloomStart: f32, // age when petals begin to open
+  bloomSteps: f32, // bud -> fully open
+  wiltSteps: u32 // length of wilt (3 to MAX_WILT_STEPS)
+}
+
+fn plantSeed(a: u32) -> u32 {
+  return a & 15u;
+}
+
+fn wiltLeft(a: u32) -> u32 {
+  return a >> 4u;
+}
+
+fn packPlantA(seed: u32, countdown: u32) -> u32 {
+  return (seed & 15u) | (min(countdown, MAX_WILT_STEPS) << 4u);
+}
+
+fn lifecycle(cell: vec2u, seed: u32, lifespan: u32) -> Lifecycle {
+  let j = rand3(vec3u(cell, seed + 0x5eedu));
+  let k = rand3(vec3u(cell.yx, seed + 0xb100u));
+
+  var lc: Lifecycle;
+
+  lc.life = min(f32(lifespan) * mix(0.7, 1.3, j.x), 255.0);
+  lc.growSteps = max(2.0, lc.life * mix(0.04, 0.1, j.y));
+  lc.bloomStart = lc.growSteps * mix(0.4, 0.9, k.x);
+  lc.bloomSteps = max(2.0, lc.life * mix(0.04, 0.12, k.y));
+  lc.wiltSteps = u32(
+    clamp(
+      lc.life * mix(0.08, 0.2, j.z),
+      3.0,
+      f32(MAX_WILT_STEPS))
+  );
+  
+  return lc;
 }
 
 const SUN_DIR = vec3f(0.645, 0.591, 0.484);
@@ -38,7 +86,8 @@ struct FlowerParams {
   petalWidth: f32,
   petalCup: f32,
   centerRadius: f32,
-  _pad1: vec2f,
+  boundCenterY: f32, // create a bounding sphere in the flower space (unit plant size)
+  boundRadius: f32,
   petalColor: vec4f,
   centerColor: vec4f,
   stemColor: vec4f
@@ -154,12 +203,21 @@ fn gradientSlope(g: vec2f) -> f32 {
   return t / (1.0 + t);
 }
 
-fn shade(albedo: vec3f, n: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
-  let diffuse = max(dot(n, SUN_DIR), 0.0) * vec3f(1.0, 0.95, 0.85);
-  let ambient = mix(vec3f(0.16, 0.15, 0.12), SKY * 0.5, n.y * 0.5 + 0.5);
-  let color = albedo * (diffuse + ambient);
+const SUN_COLOR = vec3f(1.0, 0.95, 0.85);
+
+// ambient lighting (ground and sky)
+fn ambientLight(n: vec3f) -> vec3f {
+  return mix(vec3f(0.16, 0.15, 0.12), SKY * 0.5, n.y * 0.5 + 0.5);
+}
+
+fn applyFog(color: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
   let fog = 1.0 - exp(-max(distance(world, camPos) - 60.0, 0.0) * 0.002);
   return mix(color, SKY, fog);
+}
+
+fn shade(albedo: vec3f, n: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
+  let diffuse = max(dot(n, SUN_DIR), 0.0) * SUN_COLOR;
+  return applyFog(albedo * (diffuse + ambientLight(n)), world, camPos);
 }
 
 fn gamma(c: vec3f) -> vec3f {
