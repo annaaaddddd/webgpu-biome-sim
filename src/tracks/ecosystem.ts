@@ -65,8 +65,10 @@ export class EcosystemTrack implements Track {
     stepsPerSecond: 10,
     view: 'shaded',
     showPlants: true,
+    freezeCulling: false
   };
 
+  private cullCamera = createBuffer(B.UNIFORM | B.COPY_DST, 80);
   private terrainDirty = true;
   private stateDirty = true;
   private stepIndex = 0;
@@ -118,7 +120,9 @@ export class EcosystemTrack implements Track {
     this.height.createView(),
     this.state.createView(),
     { buffer: this.instances },
-    { buffer: this.drawArgs },
+    { buffer: this.drawArgs }, 
+    { buffer: this.cullCamera },
+    { buffer: this.flowers.buffer },
   ]);
   private terrainBindGroup = createBindGroup(this.terrainPipeline, [
     { buffer: camera.uniformBuffer },
@@ -153,6 +157,7 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+    gui.add(this.settings, 'freezeCulling');
 
     this.flowers.addGui(gui);
     const erosionFolder = gui.addFolder('Erosion');
@@ -205,6 +210,9 @@ export class EcosystemTrack implements Track {
 
   private compact(encoder: GPUCommandEncoder) {
     device.queue.writeBuffer(this.drawArgs, 0, new Uint32Array([FLOWER_VERTS,0, 0, 0]));
+    if (!this.settings.freezeCulling) {
+      encoder.copyBufferToBuffer(camera.uniformBuffer, 0, this.cullCamera, 0, 80);
+    }
     dispatchGrid(encoder, this.compactPipeline, this.compactBindGroup, GRID);
   }
 

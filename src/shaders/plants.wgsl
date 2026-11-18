@@ -89,6 +89,25 @@ fn partEnabled(p: FlowerParams, pv: PartVertex) -> bool {
   return (p.flags & F_CENTER) != 0u;
 }
 
+// find the smallest on-screen size of a part before it is culled
+// Saves some rasterization and pixel work (but vertex work stays same)
+fn partVisible(p: FlowerParams, kind: u32, pixelsPerUnit: f32) -> bool {
+  var extent = p.stemHeight;
+  var minPixels = 0.0;
+  if (kind == PART_LEAF) {
+    extent = p.leafLength;
+    minPixels = 3.0;
+  } else if (kind == PART_PETAL) {
+    extent = p.petalLength;
+    minPixels = 1.5;
+  } else if (kind == PART_CENTER) {
+    extent = 2.0 * p.centerRadius;
+    minPixels = 1.0;
+  }
+  
+  return extent * pixelsPerUnit >= minPixels;
+}
+
 fn partColor(p: FlowerParams, kind: u32) -> vec3f {
   if (kind == PART_PETAL) {
     return p.petalColor.rgb;
@@ -117,6 +136,13 @@ fn spine(p: FlowerParams, t: f32) -> vec3f {
   t * p.stemHeight, 0.0);
 }
 
+// Fix "head" positioning issue (top of flower not following stem curve)
+fn headFrame(p: FlowerParams) -> mat3x3f {
+  let up = normalize(vec3f(2.0 * p.stemBend, p.stemHeight, 0.0));
+  let side = vec3f(up.y, -up.x, 0.0); 
+  return mat3x3f(side, up, vec3f(0.0, 0.0, 1.0));
+}
+
 // stem tapering (u moves along the stem while v moves around it)
 fn stemPos(p: FlowerParams, uv: vec2f) -> vec3f {
   let a = uv.y * TAU;
@@ -141,7 +167,6 @@ fn leafPos(p: FlowerParams, i: u32, uv: vec2f) -> vec3f {
 }
 
 // Petals crown the head
-// need to fix rotation to follow stem bend
 fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
   let tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
   let dir = vec3f(cos(tilt), sin(tilt), 0.0);
@@ -156,12 +181,10 @@ fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
   
   let yaw = f32(i) * TAU / f32(max(p.petalCount, 1u));
 
-  return spine(p, 1.0) + rotY(yaw) * local;
+  return spine(p, 1.0) + headFrame(p) * rotY(yaw) * local;
 }
 
 // Flat-ish dome on top of stem
-// currently doesn't follow stem bend
-// both center and petals are currently oriented globally
 fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
   let th = uv.x * 0.5 * PI;
   let ph = uv.y * TAU;
@@ -171,7 +194,7 @@ fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
     sin(th) * sin(ph)
   );
 
-  return spine(p, 1.0) + local;
+  return spine(p, 1.0) + headFrame(p) * local;
 }
 
 fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
@@ -194,15 +217,17 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut
   let inst = instances[ii];
   let fp = flowers[min(inst.species - 1u, MAX_SPECIES - 1u)];
   let pv = decode(vi);
+  let open = smoothstep(2.0, 10.0, inst.age);
+  let size = plantSize(inst.age, inst.viability) * inst.fade;
+  
+  // per-part culling
+  let pixelsPerUnit = size * cam.pixelScale / max(distance(inst.pos, cam.pos), 1e-3);
 
   var out: VSOut;
-  if (!partEnabled(fp, pv)) {
-    out.clip = vec4f(2.0, 2.0, 2.0, 1.0); // vertex of part goes here to zero
+  if (!partEnabled(fp, pv) || !partVisible(fp, pv.kind, pixelsPerUnit)) {
+    out.clip = vec4f(2.0, 2.0, 2.0, 1.0); // all vertices of plant go to designated "zero" area
     return out;
   }
-
-  let open = smoothstep(2.0, 10.0, inst.age);
-  let size = smoothstep(0.0, 4.0, inst.age) * (0.6 + 0.6 * inst.viability);
 
   // compute normal from the surface differences; new parts need position dunction
   let e = 2e-3;

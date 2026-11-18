@@ -23,7 +23,7 @@ export class Camera {
   constructor() {
     this.uniformBuffer = device.createBuffer({
       size: this.data.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
 
     let dragging = false;
@@ -53,6 +53,7 @@ export class Camera {
     const proj = mat4.perspective(this.fov, canvas.width / canvas.height, 0.1, 1000);
     this.data.set(mat4.multiply(proj, view), 0);
     this.data.set(pos, 16);
+    this.data[19] = canvas.height / (2 * Math.tan(this.fov / 2)) // camera.pixelScale
     device.queue.writeBuffer(this.uniformBuffer, 0, this.data);
   }
 }

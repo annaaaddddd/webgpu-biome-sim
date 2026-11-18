@@ -4,6 +4,7 @@
 struct Camera {
   viewProj: mat4x4f,
   pos: vec3f,
+  pixelScale: f32 // canvas.height / (2tan(fov / 2)), pixels per world unit
 }
 
 struct PlantInstance {
@@ -12,7 +13,12 @@ struct PlantInstance {
   rotation: f32,
   age: f32,
   viability: f32,
-  _pad: f32,
+  fade: f32, // size: 0 -> 1 depending on flower proximity to cull size
+}
+
+// Growth scale for culling (compact) and drawing (plants)
+fn plantSize(age: f32, viability: f32) -> f32 {
+  return smoothstep(0.0, 4.0, age) * (0.6 + 0.6 * viability);
 }
 
 const SUN_DIR = vec3f(0.645, 0.591, 0.484);
@@ -38,7 +44,8 @@ struct FlowerParams {
   petalWidth: f32,
   petalCup: f32,
   centerRadius: f32,
-  _pad1: vec2f,
+  boundCenterY: f32, // create a bounding sphere in the flower space (unit plant size)
+  boundRadius: f32,
   petalColor: vec4f,
   centerColor: vec4f,
   stemColor: vec4f
