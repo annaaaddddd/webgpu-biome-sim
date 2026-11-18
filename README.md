@@ -233,6 +233,16 @@ The vertex shader is improved to modify each species' FlowerParams locally, as t
 
 <img width="770" alt="image" src="https://github.com/user-attachments/assets/a278688d-718a-46be-b088-d63e067b979b" />
 
+#### Fix: Plant culling
+
+A considerably large simulation of unculled flowers can be significantly slow.  A bounding sphere is computed per species on the CPU, then stored in two parameters (bounding center and radius), scaled per plant by its size.  A frustum test is run against six planes from the viewProj matrix rows, using [Gribb-Hartmann's method for extracting view-frustum planes](https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf).  A screen size test is run using the projected radius; plants under 1 pixel are culled, and between 1-4 pixels, they are shrunk using a fade factor, so there is no abrupt visual culling behavior.
+
+The above describes the whole-flower culling method.  There is an additional per-part culling method, partVisible, that drops a plant part when its on-screen size falls below a per-part size threshold.  Leaves: 3 px, petals: 1.5 px, center: 1 px, and the stem is culled only if the entire flower must be culled.  This improves rasterization and per-pixel work, whereas whole flower culling addresses improved vertex work.
+
+A freeze-culling tool is toggleable as a debug option to help visualize with and without culling.
+
+<img width="1061" height="575" alt="image" src="https://github.com/user-attachments/assets/08319c3f-c99c-409f-b632-e4996cc185f2" />
+
 #### Where species grow on the eroded terrain
 
 The `habitat` view colors every cell by the species that fits it best, occupied or not, next to the `species` view of where plants are.
