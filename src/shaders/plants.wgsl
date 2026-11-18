@@ -8,6 +8,10 @@ struct VSOut {
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) color: vec3f,
+  @location(3) uv: vec2f, // patch coordinates (x: bottom to tip, y: breadth)
+  @location(4) @interpolate(flat) part: u32, // which part of plant
+  @location(5) @interpolate(flat) variation: f32, // random val per petal
+  @location(6) wilt: f32
 }
 
 @group(0) @binding(0) var<uniform> cam: Camera;
@@ -260,19 +264,73 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut
   out.normal = rot * n;
   
   // browns as it wilts, petals will brown faster than the stem
-  let brown = smoothstep(0.15, 0.85, wilt) * select(0.6, 0.9, pv.kind == PART_PETAL);
+  let brown = smoothstep(0.15, 0.85, wilt) * select(0.6, 0.9, pv.kind == PART_PETAL)
+  ;
   out.color = mix(partColor(fp, pv.kind), WILT_BROWN, brown);
-
+  out.uv = pv.uv;
+  out.part = pv.kind;
+  out.variation = rand3(vec3u(bitcast<u32>(inst.rotation), pv.index, 0x51u)).x;
+  out.wilt = wilt;
   out.clip = cam.viewProj * vec4f(out.world, 1.0);
   return out;
+}
+
+// More rigorous petal shading
+// soft rim and darkening where petals overlap; thin effect because petals are mostly backlit or at grazing angles
+fn shadePetal(in: VSOut, n: vec3f, toCamera: vec3f) -> vec3f {
+  let u = in.uv.x; // 0 center, 1 tip
+  let x = 2.0 * in.uv.y - 1.0; // -1 to 1 across petal and 0 at middle
+
+  // Albedo coloring (deeper color toward base, paler toward tip, slight hue jittering per petal for randomness)
+  var albedo = in.color * mix(0.9, 1.1, in.variation);
+  albedo = mix(albedo * vec3f(0.75, 0.6, 0.45), albedo, smoothstep(0.0, 0.35, u));
+  albedo = mix(albedo, albedo * 0.6 + 0.4, smoothstep(0.7, 1.0, u) * 0.35);
+
+  // petal "veins"
+  let veins = abs(sin(x * PI * 3.5));
+  let vein = (1.0 - smoothstep(0.0, 0.12, veins)) *
+            (1.0 - smoothstep(0.3, 0.95, u));
+  albedo *= 1.0 - 0.18 * vein;
+
+  // diffuse: thin petals don't go to black
+  let ndl = dot(n, SUN_DIR);
+  let wrap = 0.35;
+  let diffuse = max((ndl + wrap) / (1.0 + wrap), 0.0) * SUN_COLOR;
+
+  // transmission
+  // thin edges/tip, more "glow", veins block some light
+  let thinness = mix(0.6, 1.0, max(abs(x), u));
+  let backLit = max(-ndl, 0.0);
+  let towardSun = pow(max(dot(-toCamera, SUN_DIR), 0.0), 3.0);
+  let transmit = (0.55 * backLit + 0.6 * towardSun) 
+                  * thinness * (1.0 - 0.5 * vein);
+  let transmitted = transmit * SUN_COLOR * albedo * albedo * 1.6; // squared albedo for better glow saturation
+
+  // slight petal sheen
+  let rim = pow(1.0 - max(dot(n, toCamera), 0.0), 3.0) * 0.18;
+
+  // petal overlap areas block some light
+  let occlusion = mix(0.5, 1.0, smoothstep(0.0, 0.3, u));
+
+  var color = albedo * (diffuse + ambientLight(n)) * occlusion + transmitted + rim * albedo;
+
+  // petal wilt means less transmission and duller overall
+  color = mix(color, albedo * (diffuse + ambientLight(n)) * occlusion * 0.8, in.wilt);
+
+  return color;
 }
 
 @fragment
 fn fs(in: VSOut) -> @location(0) vec4f {
   // light the side of the petal/leaf that faces the camera
+  let toCamera = normalize(cam.pos - in.world);
   var n = normalize(in.normal);
   if (dot(n, cam.pos - in.world) < 0.0) {
     n = -n;
+  }
+
+  if (in.part == PART_PETAL) {
+    return vec4(gamma(applyFog(shadePetal(in, n, toCamera), in.world, cam.pos)), 1.0);
   }
   return vec4f(gamma(shade(in.color, n, in.world, cam.pos)), 1.0);
 }

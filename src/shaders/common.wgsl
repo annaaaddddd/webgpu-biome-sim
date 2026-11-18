@@ -170,12 +170,21 @@ fn gradientSlope(g: vec2f) -> f32 {
   return t / (1.0 + t);
 }
 
-fn shade(albedo: vec3f, n: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
-  let diffuse = max(dot(n, SUN_DIR), 0.0) * vec3f(1.0, 0.95, 0.85);
-  let ambient = mix(vec3f(0.16, 0.15, 0.12), SKY * 0.5, n.y * 0.5 + 0.5);
-  let color = albedo * (diffuse + ambient);
+const SUN_COLOR = vec3f(1.0, 0.95, 0.85);
+
+// ambient lighting (ground and sky)
+fn ambientLight(n: vec3f) -> vec3f {
+  return mix(vec3f(0.16, 0.15, 0.12), SKY * 0.5, n.y * 0.5 + 0.5);
+}
+
+fn applyFog(color: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
   let fog = 1.0 - exp(-max(distance(world, camPos) - 60.0, 0.0) * 0.002);
   return mix(color, SKY, fog);
+}
+
+fn shade(albedo: vec3f, n: vec3f, world: vec3f, camPos: vec3f) -> vec3f {
+  let diffuse = max(dot(n, SUN_DIR), 0.0) * SUN_COLOR;
+  return applyFog(albedo * (diffuse + ambientLight(n)), world, camPos);
 }
 
 fn gamma(c: vec3f) -> vec3f {
