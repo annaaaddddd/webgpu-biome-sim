@@ -13,3 +13,29 @@ body {
   width: 100%;
   height: 100%;
 }
+
+#population {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(17, 17, 17, 0.8);
+  color: #ddd;
+  font: 11px/1.5 ui-monospace, Consolas, monospace;
+  pointer-events: none;
+}
+
+#population td {
+  padding: 0 6px;
+  text-align: right;
+}
+
+#population tr:first-child {
+  color: #999;
+}
+
+#population canvas {
+  display: block;
+  margin: 6px 0 2px;
+}

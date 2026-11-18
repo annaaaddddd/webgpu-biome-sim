@@ -10,9 +10,17 @@ struct PlantInstance {
   pos: vec3f,
   species: u32,
   rotation: f32,
-  age: f32,
-  viability: f32,
-  _pad: f32,
+  age: f32,       // steps since it germinated
+  viability: f32, // 0..1
+  wilt: f32,      // 0 healthy, rises to 1 while it dies
+}
+
+// One wind for flowers, clouds and rain, see sim/wind.ts.
+struct Wind {
+  dir: vec2f,     // unit, world xz, the way it blows
+  offset: vec2f,  // how far the air has moved, so gusts travel downwind
+  strength: f32,  // 0 calm, 1 normal
+  time: f32,
 }
 
 const SUN_DIR = vec3f(0.645, 0.591, 0.484);
@@ -45,7 +53,7 @@ struct FlowerParams {
 } // 112 bytes total
 
 struct CloudParams {
-  offset: f32,   // distance the layer has drifted, in world units
+  offset: vec2f, // how far the layer has drifted with the wind, in world units
   cover: f32,    // 0..1, higher = more sky covered
   scale: f32,    // noise frequency; smaller = bigger clouds
   alpha: f32,    // opacity of the full stack
@@ -97,17 +105,14 @@ fn fbm(pIn: vec2f) -> f32 {
   return sum;
 }
 
-// Drift direction, about unit length, so speed alone sets how fast clouds move.
-const WIND = vec2f(0.94, 0.34);
-
 // How much cloud is above a world xz position, 0..1. The cloud layer, and
 // anything that depends on where the clouds are, should all call this.
 // bias raises the cutoff (thinner clouds); each layer of the stack passes its own.
 fn cloudDensity(world: vec2f, c: CloudParams, bias: f32) -> f32 {
   // The whole pattern slides with the wind. A second, slower noise bends the
   // lookup so the shapes also change as they move.
-  let p = (world - WIND * c.offset) * c.scale;
-  let warp = fbm(p * 0.5 + WIND.yx * c.offset * c.scale * 0.4);
+  let p = (world - c.offset) * c.scale;
+  let warp = fbm(p * 0.5 + c.offset.yx * c.scale * 0.4);
   let n = fbm(p + warp * 1.5);
 
   // fbm sits mostly in 0.25..0.75, so cover moves the cutoff across that range.
