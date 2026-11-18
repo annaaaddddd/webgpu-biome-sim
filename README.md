@@ -16,7 +16,7 @@ npm run dev
 
 Open `http://localhost:5173/?track=<name>`. Needs a browser with WebGPU (Chrome 113+).
 
-## Tracks
+## Milestone 1
 
 Each Milestone 1 track is a class in `src/tracks/` registered in `src/main.ts`.
 
@@ -40,9 +40,9 @@ Planned for M1: terrain + one erosion pass. Done:
 | --- | --- |
 | ![](media/erosion/erosion_m1_initial.png) | ![](media/erosion/erosion_m1_after30s.png) |
 
-*Timelapse and before/after: 512 x 512 grid, dt 0.05, 1 step/frame at ~60 fps; rain 0.02, pipe 1.0, Kc 0.05, Ks 0.3, Kd 0.5, Ke 0.5, Kt 0.5, talus 0.01, maxDepth 0.01. Taken before the velocity clamp fix; with the clamp active the same look needs Kc 0.01, which is now the default.*
+*Timelapse and before/after: 512 x 512 grid, dt 0.05, 1 step/frame at ~60 fps; rain 0.02, pipe 1.0, Kc 0.05, Ks 0.3, Kd 0.5, Ke 0.5, Kt 0.5, talus 0.01, maxDepth 0.01. Taken before the velocity clamp fix; with the clamp active the same look needs Kc 0.01, the M1 default.*
 
-Passes per step: rain -> flux -> water -> erosion/deposition -> sediment transport -> thermal, then an export pass writes the shared height and moisture textures.
+Passes per step: rain -> flux -> water (moves the water and the sediment it carries) -> erosion/deposition -> evaporation -> thermal, then an export pass writes the shared height and moisture textures. At M1 sediment moved in its own semi-Lagrangian transport pass; M2 replaced it (see below).
 
 State:
 - ping-ponged `rgba32float` textures: height / water / sediment, and flux in four directions
@@ -70,9 +70,9 @@ GUI: `view` switches between shaded, height and moisture; the Simulation folder 
 | --- | --- | --- |
 | ![](media/erosion/erosion_m1_shaded_closeup.png) | ![](media/erosion/erosion_m1_height_view.png) | ![](media/erosion/erosion_m1_moisture_view.png) |
 
-*Same settings as the timelapse, except moistureScale 25 (default 2) for the moisture view.*
+*Same settings as the timelapse, except moistureScale 25 (M1 default 2) for the moisture view.*
 
-One full sim step takes about 0.12 ms on the GPU at 512 x 512, under 1% of a 60 fps frame. No single pass dominates: water is the slowest at about 20% of the step, and every pass is a full-grid read and write of float textures, so the cost is spread evenly. Timed with `?track=erosion&bench=300&steps=10&warmup=600&csv`, which records GPU timestamps around each pass of the first step in a frame.
+M1 timing (the M1 passes and defaults, before the M2 transport rewrite): one full sim step took about 0.12 ms on the GPU at 512 x 512, under 1% of a 60 fps frame. No single pass dominates: water is the slowest at about 20% of the step, and every pass is a full-grid read and write of float textures, so the cost is spread evenly. Timed with `?track=erosion&bench=300&steps=10&warmup=600&csv`, which records GPU timestamps around each pass of the first step in a frame.
 
 ![GPU time per erosion pass](media/erosion/erosion_timing_512.svg)
 
@@ -101,6 +101,68 @@ Each flower reads its “vertex instance”, looks up its flower species for the
 The uv is simply discarded if toggled off, but if toggled on, is calculated positionally using a placement surface function unique to each part of the plant.  This is how the stem is placed first, then the leaves going along the stem, then the disc center and the petals.  A plant instance has position, species, age, viability attributes; specific flower params include toggles, counts, shape floats, and colors.
 
 By keeping a shape per species, variation per instance model, we can keep flowers as fixed sets of parts.  lil gui then edits flower species object and packs all four species into one write buffer.  Ultimately, no geometry is stored, allowing for massive flower instancing.
+
+## Milestone 2
+
+### Anna: erosion in the ecosystem, rain and clouds
+
+Planned: connect live erosion to the ecosystem, and add moving procedural clouds and visible rain tied to the rain-rate control. All three are done. Two fixes came up during the integration, conservative sediment transport and open map edges.
+
+![Rain and clouds over the eroding terrain](media/erosion/eco_m2.gif)
+
+#### Erosion in the ecosystem
+
+`?track=ecosystem` now runs on the live erosion sim instead of the noise stub. Add `&terrain=stub` to get the stub back. The sim is its own class in `src/sim/` and writes into textures the caller passes in, so any track can drive it. It also shares the shader prelude with the ecosystem, so both use the same fBm noise.
+
+- the starting terrain uses the same shaping as the stub, so a seed gives the same map either way
+- moisture is a height/noise baseline plus a moving average of water depth, so species follow where water actually flows. The time constant `moistureTau` is in sim seconds and does not depend on dt or steps per frame
+- `pause erosion` freezes the terrain while rain, flow and evaporation keep running. Erosion works on geological time and the ecosystem on seasons, so the terrain is shaped first and then held still
+- the slope term now uses world units. Before, slopes were underestimated by a factor of `HEIGHT_SCALE` (18)
+- water lasts about 670 steps instead of 40 (Ke 0.5 -> 0.03), long enough to reach the valleys
+
+| Noise stub (`&terrain=stub`) | Eroded, paused at 30k steps |
+| --- | --- |
+| <img src="media/erosion/erosion_m2_stub.png" width="420"> | <img src="media/erosion/erosion_m2_eroded.png" width="420"> |
+
+*Seed 1, default camera and sim settings, clouds hidden.*
+
+#### Rain and clouds
+
+Both show up in the gif above.
+
+- rain is drawn as instanced streaks with no vertex buffer. The streak count follows the sim's `rainRate`, up to 20 000 at the slider max
+- clouds are a few stacked layers of domain-warped fBm that drift with the wind and fade out past the map edge. Higher layers use a higher cutoff, so the stack narrows toward the top
+
+`cloudDensity()` is in the shared `common.wgsl`, so other passes can sample the same cloud pattern, for example for a cloud-driven rain map or cloud shadows in M3. For now rain falls over the whole map and does not follow the clouds.
+
+#### Fix: conservative sediment transport
+
+At M1 the transport pass moved sediment with semi-Lagrangian advection, where each cell samples the sediment upstream along its velocity. Sampling does not conserve mass. A probe (`?probe`, which logs grid totals of land, sediment and water once a second) showed the land losing about 95% of its mass in 100k steps.
+
+Now sediment moves with the water in the water pass. Water flows between neighbors through four virtual pipes per cell (the flux texture from M1). Each pipe carries sediment in proportion to its water flow and the sender's concentration, so whatever one cell sends, its neighbor receives. Land plus sediment is conserved between cells, and the only way out is the map edge, covered in the next section. The transport pass now only evaporates.
+
+#### Fix: open sea boundary
+
+The map edges used to be closed, so sediment could never leave and every basin silted up. The ecosystem draws water wherever height <= `WATER_LEVEL` (0.05), so lakes disappeared as their floors filled.
+
+Now the neighbor past the edge is the sea.
+
+- sea edges drain to sea level, and dry-land edges see level ground past them, so the map does not end in a cliff. The outside water surface is `max(WATER_LEVEL, own bed height)`
+- edge cells are topped up to `WATER_LEVEL`, and water that flows out through the edge pipes takes its sediment with it
+- the initial terrain already falls below `WATER_LEVEL` toward the edges, so the fixed water plane is now the sim's actual sea level
+
+| Closed edges, 66k steps | Open edges, 66k steps |
+| --- | --- |
+| <img src="media/erosion/erosion_m2_closed_edges.png" width="420"> | <img src="media/erosion/erosion_m2_open_edges.png" width="420"> |
+
+| Cells at or below `WATER_LEVEL` | start | 66k steps | 150k steps |
+| --- | --- | --- | --- |
+| closed edges | 19.7% | 7.2% | 0.9% |
+| open edges | 19.8% | 19.4% | 25.2% |
+
+*Default sim settings, 512 x 512. Images use seed 1 and the default camera, with erosion paused at 66k steps and clouds hidden.*
+
+With open edges, land is no longer conserved. What leaves is sediment that water carries off the map, not a numerical error. Over 150k steps the mean land height drops by about 11%, and about 59% of the eroded material leaves within the first 40k steps. Inland basins with no path to the edge still fill up. Drawing water from the sim's water depth instead of a fixed level could be a potentail M3 fix.
 
 ## Shared layout
 

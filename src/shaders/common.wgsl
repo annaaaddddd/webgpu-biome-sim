@@ -44,6 +44,17 @@ struct FlowerParams {
   stemColor: vec4f
 } // 112 bytes total
 
+struct CloudParams {
+  offset: f32,   // distance the layer has drifted, in world units
+  cover: f32,    // 0..1, higher = more sky covered
+  scale: f32,    // noise frequency; smaller = bigger clouds
+  alpha: f32,    // opacity of the full stack
+  height: f32,   // y of the bottom layer
+  size: f32,     // width of the layer, in world units
+  layers: f32,   // layer count, f32 so the struct is all floats
+  spacing: f32,  // vertical gap between layers
+}
+
 fn pcg3d(vIn: vec3u) -> vec3u {
   var v = vIn * 1664525u + 1013904223u;
   v.x += v.y * v.z;
@@ -84,6 +95,28 @@ fn fbm(pIn: vec2f) -> f32 {
     amp *= 0.5;
   }
   return sum;
+}
+
+// Drift direction, about unit length, so speed alone sets how fast clouds move.
+const WIND = vec2f(0.94, 0.34);
+
+// How much cloud is above a world xz position, 0..1. The cloud layer, and
+// anything that depends on where the clouds are, should all call this.
+// bias raises the cutoff (thinner clouds); each layer of the stack passes its own.
+fn cloudDensity(world: vec2f, c: CloudParams, bias: f32) -> f32 {
+  // The whole pattern slides with the wind. A second, slower noise bends the
+  // lookup so the shapes also change as they move.
+  let p = (world - WIND * c.offset) * c.scale;
+  let warp = fbm(p * 0.5 + WIND.yx * c.offset * c.scale * 0.4);
+  let n = fbm(p + warp * 1.5);
+
+  // fbm sits mostly in 0.25..0.75, so cover moves the cutoff across that range.
+  let cutoff = mix(0.8, 0.2, c.cover) + bias;
+  let density = smoothstep(cutoff, cutoff + 0.09, n);
+
+  // Fade out toward the edge of the layer so it has no visible border.
+  let edge = 1.0 - smoothstep(0.6, 1.0, length(world) / (c.size * 0.5));
+  return density * edge;
 }
 
 fn texel(uv: vec2f) -> vec2i {
