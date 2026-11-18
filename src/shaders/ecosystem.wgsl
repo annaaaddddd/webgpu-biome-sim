@@ -1,73 +1,57 @@
-// Ecosystem step after Cordonnier et al. 2017, reduced to live or die: each species has a
-// viability over height, slope and moisture, empty cells get seeded from plants nearby,
-// occupied cells age and die faster the less viable they are. mode 0 seeds the map from scratch.
-
-struct Species {
-  height: vec2f,
-  moisture: vec2f,
-  slopeMax: f32,
-  softness: f32,
-  _pad: vec2f,
-}
-
-struct Sim {
-  mode: u32,
-  frame: u32,
-  speciesCount: u32,
-  lifespan: u32,
-  mortality: f32,
-  spawnRate: f32,
-  _pad: vec2f,
-  species: array<Species, 4>,
-}
-
-struct Pick {
-  id: u32,
-  viability: f32,
-}
+// Ecosystem step after Cordonnier et al. 2017, reduced to live or die: empty cells get seeded
+// from healthy plants nearby, occupied cells age and die faster the less viable they are, and a
+// dying plant wilts for its own wilt time before its cell frees up (lifecycle in common.wgsl).
+// mode 0 seeds the map from scratch. Needs species.wgsl.
 
 @group(0) @binding(0) var heightTex: texture_2d<f32>;
 @group(0) @binding(1) var moistureTex: texture_2d<f32>;
 @group(0) @binding(2) var stateIn: texture_2d<u32>;
 @group(0) @binding(3) var stateOut: texture_storage_2d<rgba8uint, write>;
 @group(0) @binding(4) var<uniform> sim: Sim;
+@group(0) @binding(5) var<storage, read_write> events: array<atomic<u32>, MAX_SPECIES * EVENT_KINDS>;
 
 const CROWDED_NEIGHBORS = 2u;
 
-fn plateau(x: f32, range: vec2f, soft: f32) -> f32 {
-  return smoothstep(range.x - soft, range.x, x) * (1.0 - smoothstep(range.y, range.y + soft, x));
-}
+// event kinds, in the order sim/census.ts reads them
+const SEEDED = 0u;
+const SPROUTED = 1u;
+const STRESSED = 2u;
+const CROWDED = 3u;
+const AGED = 4u;
+const NO_DEATH = EVENT_KINDS;
 
-fn viability(id: u32, h: f32, slope: f32, m: f32) -> f32 {
-  let s = sim.species[id];
-  let flatEnough = 1.0 - smoothstep(s.slopeMax * 0.6, s.slopeMax, slope);
-  let dryLand = smoothstep(WATER_LEVEL, WATER_LEVEL + 0.03, h);
-  return plateau(h, s.height, s.softness) * plateau(m, s.moisture, s.softness) * flatEnough * dryLand;
-}
-
-fn bestSpecies(h: f32, slope: f32, m: f32) -> Pick {
-  var best = Pick(0u, 0.0);
-  for (var id = 0u; id < sim.speciesCount; id++) {
-    let v = viability(id, h, slope, m);
-    if (v > best.viability) {
-      best = Pick(id, v);
-    }
-  }
-  return best;
+fn record(id: u32, kind: u32) {
+  atomicAdd(&events[id * EVENT_KINDS + kind], 1u);
 }
 
 fn plant(id: u32, age: u32, v: f32, a: u32) -> vec4u {
   return vec4u(id + 1u, min(age, 255u), u32(v * 255.0), a);
 }
 
-// Species in the i-th cell of the (2r+1)^2 square around p, skipping p itself.
+// Healthy species in the i-th cell of the (2r+1)^2 square around p, skipping p itself.
+// A wilting plant counts as empty: it neither seeds nor crowds.
 fn neighborSpecies(p: vec2i, r: i32, i: u32) -> u32 {
   let side = 2 * r + 1;
   let count = u32(side * side - 1);
   let k = i32(min(i, count - 1u));
   let kk = select(k, k + 1, k >= (side * side) / 2);
   let q = clamp(p + vec2i(kk % side, kk / side) - r, vec2i(0), vec2i(i32(GRID) - 1));
-  return textureLoad(stateIn, q, 0).r;
+  let cell = textureLoad(stateIn, q, 0);
+  return select(0u, cell.r, wiltLeft(cell.a) == 0u);
+}
+
+fn deathCause(aged: bool, v: f32, crowded: bool, roll: f32) -> u32 {
+  let stress = sim.mortality * (1.0 - v);
+  if (aged) {
+    return AGED;
+  }
+  if (roll < stress) {
+    return STRESSED;
+  }
+  if (crowded && roll < stress + 0.25) {
+    return CROWDED;
+  }
+  return NO_DEATH;
 }
 
 @compute @workgroup_size(8, 8)
@@ -92,6 +76,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         best.viability,
         packPlantA(newSeed, 0u)
       );
+      record(best.id, SPROUTED);
     }
 
     textureStore(stateOut, p, cell);
@@ -105,26 +90,25 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     occupied += u32(neighborSpecies(p, 1, i) != 0u);
   }
 
-  for (var i = 0u; i < 8u; i++) {
-    occupied += u32(neighborSpecies(p, 1, i) != 0u);
-  }
-
   if (cell.r != 0u) {
-    let v = viability(cell.r - 1u, h, slope, m);
+    let id = cell.r - 1u;
+    let v = viability(id, h, slope, m);
     let seed = plantSeed(cell.a);
     let lc = lifecycle(gid.xy, seed, sim.lifespan);
     let age = cell.g + 1u;
-    
+
     var left = wiltLeft(cell.a);
 
     if (left > 0u) {
       // already wilting: count down, remove when it runs out
       left -= 1u;
     } else {
-      let death = sim.mortality * (1.0 - v) + select(0.0, 0.25, occupied >= CROWDED_NEIGHBORS);
-      
-      if (f32(age) >= lc.life - f32(lc.wiltSteps) || rnd.x < death) {
+      let aged = f32(age) >= lc.life - f32(lc.wiltSteps);
+      let cause = deathCause(aged, v, occupied >= CROWDED_NEIGHBORS, rnd.x);
+
+      if (cause != NO_DEATH) {
         left = lc.wiltSteps; // start wilting instead of vanishing
+        record(id, cause);
       }
     }
 
@@ -133,7 +117,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     if (wiltedOut) {
       cell = vec4u(0u);
     } else {
-      cell = plant(cell.r - 1u, age, v, packPlantA(seed, left));
+      cell = plant(id, age, v, packPlantA(seed, left));
     }
   } else {
     let parent = neighborSpecies(p, 2, u32(rnd.z * 24.0));
@@ -143,12 +127,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
       if (rnd.y < sim.spawnRate * v * v) {
         cell = plant(parent - 1u, 0u, v, packPlantA(newSeed, 0u));
+        record(parent - 1u, SEEDED);
       }
     } else if (rnd.y < 0.0005) {
       let best = bestSpecies(h, slope, m);
 
       if (best.viability > 0.5) {
         cell = plant(best.id, 0u, best.viability, packPlantA(newSeed, 0u));
+        record(best.id, SPROUTED);
       }
     }
   }

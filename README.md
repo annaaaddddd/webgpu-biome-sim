@@ -164,19 +164,108 @@ Now the neighbor past the edge is the sea.
 
 With open edges, land is no longer conserved. What leaves is sediment that water carries off the map, not a numerical error. Over 150k steps the mean land height drops by about 11%, and about 59% of the eroded material leaves within the first 40k steps. Inland basins with no path to the edge still fill up. Drawing water from the sim's water depth instead of a fixed level could be a potentail M3 fix.
 
+### Ximing: walking, wind, population census, lifecycle
+
+Planned: ground-level navigation, wind controls with flower sway, a check of where species grow on the eroded terrain, per-species population counts on the GPU with seeding and mortality verified, and lifecycle state for flower animation. All of it is done. Two fixes came up while checking the merged terrain, soil creep in the erosion and flooded plants.
+
+![Walking through the meadow in wind and rain](media/ecosystem/eco_m2_walk.jpg)
+
+*Seed 1 at 150k erosion steps, wind strength 1.6, rain rate 0.002.*
+
+#### Walking and wind
+
+- `walk (WASD)` puts the camera at eye height. Drag to look, WASD to move, Shift to run. The terrain only exists on the GPU and erosion rewrites it every frame, so the height under the camera is read back one texel at a time and the camera eases toward it
+- the `Wind` folder sets one direction and strength for the whole scene. Flowers bend downwind along an arc from the base to the top of the stem, so leaves and the head tilt with it, in gusts that travel with the wind. Clouds drift along it and rain streaks slant with it
+- the shaded view decides water from the height of the surface at each pixel instead of once per cell, which removes a saw-tooth edge along steep shores
+
+#### Population census
+
+`showPopulation` opens a panel with one row per species: living plants, their mean viability, and habitat, the share of the map the species could live on. A compute pass counts all of it every frame and 144 bytes are read back. It also runs while the ecosystem is paused, so habitat follows the erosion live.
+
+![Population panel over the map](media/ecosystem/eco_m2_census.jpg)
+
+*Seed 1 at 150k erosion steps with `play` on.*
+
+The step pass also counts births, split into seeded by a neighbour and sprouted from the seed bank, and deaths by cause: stress, crowding and old age. Two checks come out of that:
+
+- every living plant was born once and has not died, so births minus deaths must equal the count. The panel checks this on every update. It held through reseeds, seed changes and species-count changes
+- the stress rule is `mortality x (1 - viability)`. With mortality 0.04 and the measured mean viability it predicts 0.00522 deaths per plant per step. Counted over 1,005 steps on about 15,000 plants it was 0.00515. The gap is the 1.2% of plants that old age takes first each step
+
+Viability now takes the weakest of its factors instead of their product, which is the rule in Cordonnier et al. 2017.
+
+Census cost on the GPU, timed with the pass timer from the erosion track (`?track=ecosystem&bench=300&steps=20&tile=N`):
+
+| Cells summed per thread | Pass time |
+| --- | --- |
+| 1 x 1 | 23.9 us |
+| 2 x 2 (default) | 22.6 us |
+| 4 x 4 | 26.8 us |
+| 8 x 8 | 65.4 us |
+
+*RTX 4070 Laptop, 512 x 512, seed 1, about 11,000 plants. Chrome's WebGPU developer features flag was off, so timestamps are rounded to 65.5 us. Each figure is the mean of 800 to 2,200 samples and should be rerun with the flag on.*
+
+- skipping atomic adds of zero is what made it cheap. The per-cell version took 78.2 us before that and 23.9 us after
+- summing a block of cells per thread did not help beyond that, and from 8 x 8 up it hurts, because each thread walks its block one cell at a time and too few threads share the work. An earlier version took 4 ms at 64 x 64
+
+#### Lifecycle state
+
+A plant that dies no longer vanishes in one step. It wilts first, then its cell frees up. The lifecycle itself is Lilian's: each plant gets its own lifespan and its own wilt length, 3 to 15 steps, and her flower shader animates growth, bloom and wilting from it. The state texture's alpha channel holds the plant's seed and the wilt steps left.
+
+The ecosystem side fits onto that. A wilting plant keeps its cell but neither seeds nor crowds its neighbours. The census counts wilting plants apart from living ones, and a death is counted when the wilt starts. The `lifecycle` view shows age and wilting per cell.
+
+#### Where species grow on the eroded terrain
+
+The `habitat` view colors every cell by the species that fits it best, occupied or not, next to the `species` view of where plants are.
+
+| | Species 1 | Species 2 | Species 3 | Species 4 | All |
+| --- | --- | --- | --- | --- | --- |
+| Habitat before erosion | 23.3% | 7.9% | 8.5% | 2.8% | 42.5% |
+| Habitat at 30k steps | 21.7% | 6.8% | 9.2% | 3.5% | 41.2% |
+| Viability at 30k steps of plants placed before erosion | 0.64 | 0.60 | 0.60 | 0.76 | |
+| Viability after reseeding and 300 steps of `play` | 0.88 | 0.90 | 0.83 | 0.86 | |
+| Plants after reseeding and 300 steps of `play` | 9,296 | 1,413 | 2,854 | 1,437 | 15,000 |
+
+*Seed 1, default settings, 512 x 512.*
+
+All four species keep habitat on the eroded map. A placement made before erosion goes stale, and with `play` on the population sorts itself back onto ground that fits.
+
+#### Fix: soil creep
+
+Left running, the erosion turned all land into needles. Measuring the steepest slope at every land cell showed why. The share of land at 60 to 70 degrees went from 12.9% before erosion to 52.0% at 100k steps. Water erosion only cuts where water is deep and fast, so channels keep deepening while the ground between them never erodes, and the thermal pass only moved material on slopes steeper than the talus limit of 66 degrees. All land steepened up to that limit and stopped there.
+
+The thermal pass now also has soil creep, a small flow down every slope (`soil creep` under Thermal erosion, default 0.004). Lowering the talus limit was tried first and only turned 66 degree needles into 43 degree pyramids.
+
+| No creep, 100k steps | Creep 0.004, 100k steps |
+| --- | --- |
+| <img src="media/ecosystem/eco_m2_creep_off.jpg" width="420"> | <img src="media/ecosystem/eco_m2_creep_on.jpg" width="420"> |
+
+| At 100k steps | No creep | Creep 0.004 |
+| --- | --- | --- |
+| Land at 60 to 70 degrees | 52.0% | 18.0% |
+| Spikes per 1,000 land cells | 13.4 | 0.6 |
+
+*Seed 1, default settings, same camera. A spike is a land cell more than 0.003 above all four neighbours. With creep the highest point drops from 0.994 to 0.937.*
+
+Erosion still never settles. Land keeps leaving through the sea edges, and faster with creep on long runs: 37.1% of the map is under water at 400k steps against 29.5% without. Pausing erosion is still how a map is kept.
+
+#### Fix: flooded plants
+
+Plants are placed once and erosion keeps moving the coast, so with `play` off some ended up standing in the sea. The compact pass now skips a plant when the ground under it is at or below the water level, so it is not drawn. The simulation still holds it, and it dies at the normal rate once `play` is on. At 400k steps with `play` off, 3,539 of 10,863 plants were in flooded cells and none was drawn.
+
 ## Shared layout
 
 Defined in `src/core/layout.ts` so the three tracks merge cleanly:
 
 - grid 512 x 512 cells over a 100-unit world
 - height and moisture: `r32float` textures, values in [0, 1]
-- plant state: `rgba8uint` texture, r = species (0 empty), g = age, b = viability
-- `PlantInstance`: 32 bytes, position, species, rotation, age, viability
+- plant state: `rgba8uint` texture, r = species (0 empty), g = age, b = viability, a = plant seed in the low 4 bits and wilt steps left in the high 4 (0 healthy)
+- `PlantInstance`: 32 bytes, position, species, rotation, size, open, wilt
+- `Wind`: 24-byte uniform with direction, offset, strength and time, bound by the flowers, clouds and rain
 - indirect draw args, instance count filled on the GPU
 
 ## References
 
-- G. Cordonnier et al., *Authoring Landscapes with Semi-Automatic Ecosystem Generation*, ACM TOG 2017
+- G. Cordonnier et al., *Authoring Landscapes by Combining Ecosystem and Terrain Erosion Simulation*, ACM TOG 36(4), 2017
 - X. Mei, P. Decaudin, B.-G. Hu, *Fast Hydraulic Erosion Simulation and Visualization on GPU*, Pacific Graphics 2007
 - B. Jákó, B. Tóth, *Fast Hydraulic and Thermal Erosion on the GPU*, CESCG 2011
 

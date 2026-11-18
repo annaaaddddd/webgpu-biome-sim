@@ -3,6 +3,7 @@ import { device, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import { HEIGHT_SCALE, WORLD_SIZE, MSAA_SAMPLES } from '../core/layout';
 import { shaderModule } from '../core/gpu';
+import type { Wind } from './wind';
 import cloudsWgsl from '../shaders/weather/clouds.wgsl?raw';
 
 const spacing = 1.5; // vertical gap between layers, world units
@@ -12,7 +13,7 @@ export class Clouds {
   params = {
     show: true,
     cover: 0.4,
-    speed: 3,       // world units per second
+    speed: 3,       // world units per second at wind strength 1
     scale: 0.045,   // noise frequency; smaller = bigger clouds
     alpha: 0.85,
     layers: 3.0,
@@ -21,9 +22,9 @@ export class Clouds {
   readonly height = HEIGHT_SCALE * 1.5;
   // Wider than the map so the edge fade happens off the map.
   private size = WORLD_SIZE * 2.2;
-  private offset = 0;
+  private offset = [0, 0];
 
-  // CloudParams in common.wgsl: offset, cover, scale, alpha, height, size, layers, spacing.
+  // CloudParams in common.wgsl: offset (xz), cover, scale, alpha, height, size, layers, spacing.
   // Bind this in any shader that calls cloudDensity().
   readonly uniforms: GPUBuffer;
   private pipeline: GPURenderPipeline;
@@ -31,7 +32,7 @@ export class Clouds {
 
   constructor() {
     this.uniforms = device.createBuffer({
-      size: 32,
+      size: 40,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -78,12 +79,14 @@ export class Clouds {
     folder.add(this.params, 'layers', 1, 5).step(1);
   }
 
-  update(dt: number) {
+  update(dt: number, wind: Wind) {
     const p = this.params;
-    // Accumulate the drift so changing speed does not make the layer jump.
-    this.offset += dt * p.speed;
+    // Accumulate the drift so changing speed or wind does not make the layer jump.
+    const drift = dt * p.speed * wind.params.strength;
+    this.offset[0] += wind.dir[0] * drift;
+    this.offset[1] += wind.dir[1] * drift;
     device.queue.writeBuffer(this.uniforms, 0, new Float32Array([
-      this.offset,
+      ...this.offset,
       p.cover,
       p.scale,
       p.alpha,
@@ -91,6 +94,7 @@ export class Clouds {
       this.size,
       p.layers,
       spacing,
+      0, // pad to the struct's 40 bytes
     ]));
   }
 

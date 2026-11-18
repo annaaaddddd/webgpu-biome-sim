@@ -3,6 +3,7 @@ import { device, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import { HEIGHT_SCALE, MSAA_SAMPLES } from '../core/layout';
 import { shaderModule } from '../core/gpu';
+import type { Wind } from './wind';
 import rainWgsl from '../shaders/weather/rain.wgsl?raw';
 
 // Matches the rainRate slider's upper bound in erosion_sim.ts; full slider = maxDrops.
@@ -16,15 +17,16 @@ export class Rain {
     width: 0.04,
     alpha: 0.35,
     top: HEIGHT_SCALE * 1.3,
+    drift: 6, // sideways speed at wind strength 1, world units per second
   };
   private time = 0;
   private count = 0;
 
-  private uniforms: GPUBuffer;   // time, speed, length, width, alpha, top + pad
+  private uniforms: GPUBuffer;   // time, speed, length, width, alpha, top, drift + pad
   private pipeline: GPURenderPipeline;
   private bindGroup: GPUBindGroup;
 
-  constructor(height: GPUTexture) {
+  constructor(height: GPUTexture, wind: Wind) {
     this.uniforms = device.createBuffer({
       size: 32,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -60,6 +62,7 @@ export class Rain {
         { binding: 0, resource: { buffer: camera.uniformBuffer } },
         { binding: 1, resource: height.createView() },
         { binding: 2, resource: { buffer: this.uniforms } },
+        { binding: 3, resource: { buffer: wind.uniforms } },
       ],
     });
   }
@@ -70,6 +73,7 @@ export class Rain {
     folder.add(this.params, 'length', 0.2, 4);
     folder.add(this.params, 'width', 0.01, 0.2);
     folder.add(this.params, 'alpha', 0, 1);
+    folder.add(this.params, 'drift', 0, 20).name('wind drift');
   }
 
   update(dt: number, rainRate: number) {
@@ -83,6 +87,7 @@ export class Rain {
       p.width,
       p.alpha,
       p.top,
+      p.drift,
     ]));
   }
 

@@ -44,6 +44,7 @@ export class ErosionSim {
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
     Kt: 0.05,
     talus: 0.025,    // height units; heights are in [0,1], so 0.025 is about 66 deg at 18x height scale
+    creep: 0.004,    // soil creep on every slope; 0 lets water erosion steepen all land to the talus angle
     moistureTau: 2.0, // time constant for moisture to follow water depth (see export.wgsl)
     baseline: 1.0,    // weight of the height/noise moisture baseline; 0 = water only
   };
@@ -115,8 +116,8 @@ export class ErosionSim {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
-    // SimParams in erosion.wgsl and export.wgsl: 17 f32 = 68 bytes, rounded up
-    // to 80 so there is room for 3 more. Grow in 16-byte steps after that.
+    // SimParams in erosion.wgsl and export.wgsl: 18 f32 = 72 bytes, rounded up
+    // to 80 so there is room for 2 more. Grow in 16-byte steps after that.
     this.simUniforms = device.createBuffer({
       size: 80,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -278,6 +279,7 @@ export class ErosionSim {
     const thermal = simFolder.addFolder('Thermal erosion').close();
     thermal.add(this.sim, 'Kt', 0, 1).name('slide rate (Kt)');
     thermal.add(this.sim, 'talus', 0.001, 0.05).name('max step (talus)');
+    thermal.add(this.sim, 'creep', 0, 0.02).name('soil creep');
 
     const moisture = simFolder.addFolder('Moisture').close();
     moisture.add(this.sim, 'moistureScale', 1, 50).name('water weight');
@@ -353,6 +355,7 @@ export class ErosionSim {
       this.sim.dt * this.sim.stepsPerFrame,
       this.seed,
       this.sim.baseline,
+      this.sim.creep,
     ]));
 
     for (let i = 0; i < this.sim.stepsPerFrame; i++) {

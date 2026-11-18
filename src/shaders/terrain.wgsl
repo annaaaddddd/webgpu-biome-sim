@@ -1,4 +1,5 @@
 // Heightfield draw. View 0 is the shaded biome look, the rest are debug maps.
+// Needs species.wgsl.
 
 struct Draw {
   view: u32,
@@ -17,6 +18,7 @@ struct VSOut {
 @group(0) @binding(3) var stateTex: texture_2d<u32>;
 @group(0) @binding(4) var<uniform> draw: Draw;
 @group(0) @binding(5) var<storage, read> flowers: array<FlowerParams, MAX_SPECIES>;
+@group(0) @binding(6) var<uniform> sim: Sim;
 
 // debug flower species
 fn speciesColor(id: u32) -> vec3f {
@@ -67,10 +69,12 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let n = normalize(in.normal);
 
   if (draw.view == 0u) {
-    if (h <= WATER_LEVEL) {
+    // the surface's own height, so the waterline cuts across cells instead of following their edges
+    let surface = in.world.y / HEIGHT_SCALE;
+    if (surface <= WATER_LEVEL) {
       return vec4f(gamma(waterColor(in.world)), 1.0);
     }
-    return vec4f(gamma(shade(biomeColor(h, m, slope, in.world), n, in.world, cam.pos)), 1.0);
+    return vec4f(gamma(shade(biomeColor(surface, m, slope, in.world), n, in.world, cam.pos)), 1.0);
   }
 
   var color: vec3f;
@@ -88,9 +92,23 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     case 4u: {
       color = select(vec3f(0.12), speciesColor(cell.r), cell.r != 0u);
     }
-    default: {
+    case 5u: {
       let health = mix(vec3f(0.7, 0.15, 0.1), vec3f(0.2, 0.85, 0.3), f32(cell.b) / 255.0);
       color = select(vec3f(0.08), health, cell.r != 0u);
+    }
+    case 6u: {
+      // where each species could live, occupied or not
+      let best = bestSpecies(h, slope, m);
+      color = speciesColor(best.id + 1u) * best.viability;
+    }
+    default: {
+      // young to old, brown while wilting
+      let lc = lifecycle(vec2u(p), plantSeed(cell.a), sim.lifespan);
+      let left = wiltLeft(cell.a);
+      let wilt = select(0.0, 1.0 - (f32(left) - 1.0) / f32(lc.wiltSteps), left > 0u);
+      let age = mix(vec3f(0.5, 0.9, 0.4), vec3f(0.95, 0.85, 0.3), f32(cell.g) / lc.life);
+      let stage = mix(age, vec3f(0.45, 0.25, 0.1), wilt);
+      color = select(vec3f(0.08), stage, cell.r != 0u);
     }
   }
   let light = 0.55 + 0.45 * max(dot(n, SUN_DIR), 0.0);

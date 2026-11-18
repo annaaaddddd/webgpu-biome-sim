@@ -17,6 +17,7 @@ struct VSOut {
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var<storage, read> instances: array<PlantInstance>;
 @group(0) @binding(2) var<storage, read> flowers: array<FlowerParams, MAX_SPECIES>;
+@group(0) @binding(3) var<uniform> wind: Wind;
 
 const PI = 3.14159265;
 const TAU = 6.2831853;
@@ -221,6 +222,33 @@ fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32, wilt: f32) -> 
   return centerPos(p, uv);
 }
 
+// Sway bends the flower downwind like a rod that curves evenly from its base to the top of the
+// stem. Whatever sticks out from the stem (leaves, the whole head) tilts with it.
+
+// How far the stem top of the flower at base leans, in radians: gusts that travel with the wind
+// plus a small flutter.
+fn bendAngle(base: vec3f) -> f32 {
+  let gust = valueNoise((base.xz - wind.offset) * 0.08);
+  let flutter = sin(wind.time * 5.0 + base.x * 1.7 + base.z * 2.3);
+  return wind.strength * (0.6 * gust + 0.06 * flutter);
+}
+
+// Rotates v by angle toward the wind, in the vertical plane the wind blows in.
+fn tilt(v: vec3f, angle: f32) -> vec3f {
+  let w = vec3f(wind.dir.x, 0.0, wind.dir.y);
+  let along = dot(v, w);
+  let c = cos(angle);
+  let s = sin(angle);
+  return v + w * (along * (c - 1.0) + v.y * s) + vec3f(0.0, v.y * (c - 1.0) - along * s, 0.0);
+}
+
+// Where a point `height` up the stem ends up once the stem has curved by angle at that point.
+fn arc(height: f32, angle: f32) -> vec3f {
+  let half = 0.5 * angle;
+  let chord = height * select(sin(half) / half, 1.0, abs(half) < 1e-4);
+  return chord * vec3f(wind.dir.x * sin(half), cos(half), wind.dir.y * sin(half));
+}
+
 // Compute entry points
 
 @vertex
@@ -260,9 +288,13 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut
   let n = select(vec3f(0.0, 1.0, 0.0), normalize(c), dot(c, c) > 1e-24);
 
   let rot = rotY(inst.rotation);
-  out.world = inst.pos + rot * partPos(pv, fp, pv.uv, open, wilt) * size;
-  out.normal = rot * n;
-  
+  let local = rot * partPos(pv, fp, pv.uv, open, wilt) * size;
+  let stem = max(fp.stemHeight * size, 1e-3);
+  let hang = clamp(local.y, 0.0, stem); // height on the stem this vertex hangs from
+  let angle = bendAngle(inst.pos) * hang / stem;
+  out.world = inst.pos + arc(hang, angle) + tilt(local - vec3f(0.0, hang, 0.0), angle);
+  out.normal = tilt(rot * n, angle);
+
   // browns as it wilts, petals will brown faster than the stem
   let brown = smoothstep(0.15, 0.85, wilt) * select(0.6, 0.9, pv.kind == PART_PETAL)
   ;

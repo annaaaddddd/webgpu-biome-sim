@@ -5,6 +5,9 @@ import { device, context, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import {
   GRID,
+  WORLD_SIZE,
+  HEIGHT_SCALE,
+  WATER_LEVEL,
   MAX_SPECIES,
   TERRAIN_FORMAT,
   STATE_FORMAT,
@@ -14,19 +17,32 @@ import {
   SKY_COLOR,
   MSAA_SAMPLES,
 } from '../core/layout';
-import { shaderModule, createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
+import {
+  shaderModule,
+  createBuffer,
+  createGridTexture,
+  createBindGroup,
+  dispatchGrid,
+  Readback,
+  RenderTargets,
+} from '../core/gpu';
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
+import { PopulationPanel } from './population_panel';
 import { ErosionSim } from '../sim/erosion_sim';
 import { Rain } from '../sim/rain';
 import { Clouds } from '../sim/clouds';
+import { Wind } from '../sim/wind';
+import { Census } from '../sim/census';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
+import speciesWgsl from '../shaders/species.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
 import terrainWgsl from '../shaders/terrain.wgsl?raw';
 import plantsWgsl from '../shaders/plants.wgsl?raw';
 
-const VIEWS = ['shaded', 'height', 'moisture', 'slope', 'species', 'viability'];
+const VIEWS = ['shaded', 'height', 'moisture', 'slope', 'species', 'viability', 'habitat', 'lifecycle'];
+const EYE_HEIGHT = 3.5; // world units; flowers are about 1 tall, so they come up to the waist
 
 // per species: height min/max, moisture min/max, max slope, ramp softness
 const SPECIES = [
@@ -80,7 +96,7 @@ export class EcosystemTrack implements Track {
   private targets = new RenderTargets();
   private skyClear = { r: SKY_COLOR[0] ** (1 / 2.2), g: SKY_COLOR[1] ** (1 / 2.2), b: SKY_COLOR[2] ** (1 / 2.2), a: 1 };
 
-  private height = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
+  private height = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING | T.COPY_SRC);
   private moisture = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
   private erosion = new ErosionSim(this.height, this.moisture);
   private useStub = new URLSearchParams(location.search).get('terrain') === 'stub';
@@ -97,16 +113,21 @@ export class EcosystemTrack implements Track {
   private terrainIndexCount = (GRID - 1) * (GRID - 1) * 6;
   private terrainIndexBuffer = createBuffer(B.INDEX, terrainIndices(GRID));
 
-  private rain = new Rain(this.height);
+  private wind = new Wind();
+  private rain = new Rain(this.height, this.wind);
   private clouds = new Clouds();
+  private census = new Census(this.height, this.moisture, this.state, this.simParams);
+  private panel = new PopulationPanel(MAX_SPECIES);
+  private groundReadback = new Readback(4);
+  private ground = 0;
 
   // Use per-species flower shape (created before bind groups use buffer)
   private flowers = new Flowers();
 
   private stubPipeline = computePipeline(terrainStubWgsl);
-  private stepPipeline = computePipeline(ecosystemWgsl);
+  private stepPipeline = computePipeline(speciesWgsl + ecosystemWgsl);
   private compactPipeline = computePipeline(compactWgsl);
-  private terrainPipeline = renderPipeline(terrainWgsl);
+  private terrainPipeline = renderPipeline(speciesWgsl + terrainWgsl);
   private plantsPipeline = renderPipeline(plantsWgsl); // geometry is from vertex_index
 
   private stubBindGroup = createBindGroup(this.stubPipeline, [
@@ -120,6 +141,7 @@ export class EcosystemTrack implements Track {
     this.state.createView(),
     this.stateNext.createView(),
     { buffer: this.simParams },
+    { buffer: this.census.events },
   ]);
   private compactBindGroup = createBindGroup(this.compactPipeline, [
     this.height.createView(),
@@ -136,14 +158,16 @@ export class EcosystemTrack implements Track {
     this.moisture.createView(),
     this.state.createView(),
     { buffer: this.drawParams },
-    { buffer: this.flowers.buffer }
+    { buffer: this.flowers.buffer },
+    { buffer: this.simParams },
   ]);
   private plantsBindGroup = createBindGroup(
     this.plantsPipeline,
     [
       { buffer: camera.uniformBuffer },
       { buffer: this.instances },
-      { buffer: this.flowers.buffer }
+      { buffer: this.flowers.buffer },
+      { buffer: this.wind.uniforms },
     ]
   );
 
@@ -162,9 +186,12 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'stepsPerSecond', 1, 60, 1);
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
+    gui.add(this.panel, 'visible').name('showPopulation');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+    gui.add(camera, 'walking').name('walk (WASD)');
     gui.add(this.settings, 'freezeCulling');
 
+    this.wind.addGui(gui);
     this.flowers.addGui(gui);
     const erosionFolder = gui.addFolder('Erosion');
     this.erosion.addGui(erosionFolder, false);
@@ -174,13 +201,34 @@ export class EcosystemTrack implements Track {
 
   frame(encoder: GPUCommandEncoder, dt: number) {
     this.targets.update();
+    if (camera.walking) this.followGround(dt);
     if (this.terrainDirty) this.generateTerrain(encoder);
     if (!this.useStub) this.erosion.frame(encoder);
     this.rain.update(dt, this.erosion.sim.rainRate);
-    this.clouds.update(dt);
-    if (this.stateDirty || this.takeStep(dt)) this.step(encoder);
+    this.wind.update(dt);
+    this.clouds.update(dt, this.wind);
+    const reseeded = this.stateDirty;
+    if (reseeded || this.takeStep(dt)) this.step(encoder);
+    this.census.frame(encoder, reseeded);
+    this.panel.update(dt, this.census.species, this.flowers.species.map((f) => f.petalColor));
     this.compact(encoder);
     this.draw(encoder);
+  }
+
+  // Keeps the walking camera at eye height inside the map. The terrain only exists on the GPU,
+  // so the height under the camera is read back, one texel at a time.
+  private followGround(dt: number) {
+    const edge = WORLD_SIZE / 2 - 1;
+    const t = camera.target;
+    t[0] = Math.min(edge, Math.max(-edge, t[0]));
+    t[2] = Math.min(edge, Math.max(-edge, t[2]));
+    const cell = (v: number) => Math.floor((v / WORLD_SIZE + 0.5) * GRID);
+    this.groundReadback.request(
+      (copies, target) =>
+        copies.copyTextureToBuffer({ texture: this.height, origin: [cell(t[0]), cell(t[2])] }, { buffer: target }, [1, 1]),
+      (data) => (this.ground = Math.max(new Float32Array(data)[0], WATER_LEVEL) * HEIGHT_SCALE),
+    );
+    t[1] += (this.ground + EYE_HEIGHT - t[1]) * Math.min(1, dt * 8);
   }
 
   private generateTerrain(encoder: GPUCommandEncoder) {

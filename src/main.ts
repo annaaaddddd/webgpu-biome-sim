@@ -33,7 +33,7 @@ function frame(now: number) {
   const dt = (now - last) / 1000;
   last = now;
 
-  camera.update();
+  camera.update(dt);
   const encoder = device.createCommandEncoder();
   track.frame(encoder, dt);
   device.queue.submit([encoder.finish()]);

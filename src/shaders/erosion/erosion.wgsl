@@ -18,6 +18,7 @@ struct SimParams {
   frameDt: f32,     // sim time advanced this frame, dt * stepsPerFrame (export pass only)
   seed: f32,        // offsets the moisture baseline noise, same seed as the terrain (export pass only)
   baseline: f32,    // weight of the height/noise moisture baseline (export pass only)
+  creep: f32,       // soil creep: how fast material moves down any slope, however gentle
 }
 
 @group(0) @binding(0) var<uniform> sim: SimParams;
@@ -266,26 +267,32 @@ fn thermal(@builtin(global_invocation_id) id: vec3u) {
   // half the excess and the lower cell gains it. The neighbor computes the
   // same pair with the opposite sign, so material is conserved in one pass.
   // Past the boundary there is no neighbor, so nothing moves that way.
+  // Creep moves a little down every slope the same way. Without it nothing
+  // acts below the talus angle, and water erosion steepens all land up to it.
   var dTotal = 0.0;
   if (p.x > 0) {
     let diff = b - textureLoad(stateIn, p + vec2i(-1, 0), 0).r;
     let excess = abs(diff) - talus;
     if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+    dTotal -= sim.creep * diff * sim.dt * 0.5;
   }
   if (p.x < dims.x - 1) {
     let diff = b - textureLoad(stateIn, p + vec2i(1, 0), 0).r;
     let excess = abs(diff) - talus;
     if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+    dTotal -= sim.creep * diff * sim.dt * 0.5;
   }
   if (p.y > 0) {
     let diff = b - textureLoad(stateIn, p + vec2i(0, -1), 0).r;
     let excess = abs(diff) - talus;
     if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+    dTotal -= sim.creep * diff * sim.dt * 0.5;
   }
   if (p.y < dims.y - 1) {
     let diff = b - textureLoad(stateIn, p + vec2i(0, 1), 0).r;
     let excess = abs(diff) - talus;
     if (excess > 0.0) { dTotal -= sign(diff) * sim.Kt * excess * sim.dt * 0.5; }
+    dTotal -= sim.creep * diff * sim.dt * 0.5;
   }
 
   b = max(b + dTotal, 0.0);

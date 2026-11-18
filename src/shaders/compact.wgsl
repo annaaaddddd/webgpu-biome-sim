@@ -66,7 +66,12 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
   let rnd = rand3(vec3u(gid.xy, 1234u));
   let uv = (vec2f(gid.xy) + 0.05 + 0.9 * rnd.xy) / f32(GRID);
-  let pos = vec3f((uv.x - 0.5) * WORLD_SIZE, sampleHeight(heightTex, uv) * HEIGHT_SCALE, (uv.y - 0.5) * WORLD_SIZE);
+  let ground = sampleHeight(heightTex, uv);
+  // the ground has sunk under water since this plant was placed: not drawn
+  if (ground <= WATER_LEVEL) {
+    return;
+  }
+  let pos = vec3f((uv.x - 0.5) * WORLD_SIZE, ground * HEIGHT_SCALE, (uv.y - 0.5) * WORLD_SIZE);
 
   // Lifecycle
   let lc = lifecycle(gid.xy, plantSeed(cell.a), anim.lifespan);

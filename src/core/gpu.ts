@@ -7,6 +7,7 @@ import {
   FLOWER_BUDGET,
   SKY_COLOR,
   WATER_LEVEL,
+  EVENT_KINDS,
   MSAA_SAMPLES,
 } from './layout';
 import commonWgsl from '../shaders/common.wgsl?raw';
@@ -18,6 +19,7 @@ const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
 const WATER_LEVEL = ${WATER_LEVEL}f;
 const SKY = vec3f(${SKY_COLOR.join(', ')});
 const MAX_SPECIES = ${MAX_SPECIES}u;
+const EVENT_KINDS = ${EVENT_KINDS}u;
 ${Object.entries(FLOWER_BUDGET)
   .map(([k, v]) => `const ${k} = ${v}u;`)
   .join('\n')}
@@ -46,12 +48,43 @@ export function createBindGroup(pipeline: GPUPipelineBase, resources: GPUBinding
   });
 }
 
-export function dispatchGrid(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, size: number) {
-  const pass = encoder.beginComputePass();
+export function dispatchGrid(
+  encoder: GPUCommandEncoder,
+  pipeline: GPUComputePipeline,
+  bindGroup: GPUBindGroup,
+  size: number,
+  timestampWrites?: GPUComputePassTimestampWrites,
+) {
+  const pass = encoder.beginComputePass({ timestampWrites });
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
   pass.dispatchWorkgroups(size / 8, size / 8);
   pass.end();
+}
+
+// Reads a few bytes back from the GPU without stalling. A request made while one is in
+// flight is dropped, so the data is a frame or two old.
+export class Readback {
+  private buffer: GPUBuffer;
+  private busy = false;
+
+  constructor(size: number) {
+    this.buffer = createBuffer(GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, size);
+  }
+
+  // copy records the copies into target, done gets the bytes while they are mapped.
+  request(copy: (encoder: GPUCommandEncoder, target: GPUBuffer) => void, done: (data: ArrayBuffer) => void) {
+    if (this.busy) return;
+    this.busy = true;
+    const encoder = device.createCommandEncoder();
+    copy(encoder, this.buffer);
+    device.queue.submit([encoder.finish()]);
+    this.buffer.mapAsync(GPUMapMode.READ).then(() => {
+      done(this.buffer.getMappedRange());
+      this.buffer.unmap();
+      this.busy = false;
+    });
+  }
 }
 
 // MSAA color + depth attachments that follow the canvas size.

@@ -21,6 +21,7 @@ struct SimParams {
   frameDt: f32,
   seed: f32,
   baseline: f32,
+  creep: f32,
 }
 
 // stateTex[cur]: r = terrain height (b), g = water depth (d), b = sediment (s).
