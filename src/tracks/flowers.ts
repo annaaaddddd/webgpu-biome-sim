@@ -94,6 +94,16 @@ export class Flowers {
         const f32 = new Float32Array(this.data);
         this.species.forEach((f, i) => {
             const o = (i * FLOWER_PARAMS_BYTES) / 4;
+
+            const reach = Math.max(
+                f.leafLength + f.stemRadius,
+                0.8 * f.centerRadius + f.petalLength)
+                + Math.abs(f.stemBend) + 0.5 * f.stemHeight; // add bend to accomodate for wilt
+
+            const top = f.stemHeight + Math.max(f.petalLength, 0.6 * f.centerRadius);
+
+            f32[o + 14] = top / 2; // boundCenterY
+            f32[o + 15] = Math.hypot(reach, top / 2); // boundRadius
             u32[o] = +f.stem | (+f.leaves << 1) | (+f.petals << 2) | (+f.center << 3);
             u32[o + 1] = Math.min(Math.round(f.petalCount), FLOWER_BUDGET.MAX_PETALS);
             u32[o + 2] = Math.min(Math.round(f.leafCount), FLOWER_BUDGET.MAX_LEAVES);

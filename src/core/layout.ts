@@ -13,16 +13,14 @@ export const MSAA_SAMPLES = 4;
 // height and moisture: one texel per grid cell, values in [0, 1]
 export const TERRAIN_FORMAT: GPUTextureFormat = 'r32float';
 
-// r = species id (0 = empty), g = age in steps, b = viability * 255, a = wilt step (0 = healthy)
+// r = species id (0 = empty), g = age in steps, b = viability * 255,
+// a = plant seed (low 4 bits) + wilt steps left (high 4 bits, 0 = healthy)
 export const STATE_FORMAT: GPUTextureFormat = 'rgba8uint';
-
-// steps a dying plant stays before its cell frees up
-export const WILT_STEPS = 6;
 
 // per species, counted by the step pass: seeded, sprouted, then deaths by stress, crowding, old age
 export const EVENT_KINDS = 5;
 
-// vec3f position, u32 species, f32 rotation, f32 age, f32 viability, f32 wilt (0 healthy, 1 gone)
+// vec3f position, u32 species, f32 rotation, f32 size, f32 open, f32 wilt (0 healthy, 1 gone)
 export const PLANT_INSTANCE_BYTES = 32;
 
 // indexCount, instanceCount (filled by the compact pass), firstIndex, baseVertex, firstInstance

@@ -189,7 +189,7 @@ Planned: ground-level navigation, wind controls with flower sway, a check of whe
 The step pass also counts births, split into seeded by a neighbour and sprouted from the seed bank, and deaths by cause: stress, crowding and old age. Two checks come out of that:
 
 - every living plant was born once and has not died, so births minus deaths must equal the count. The panel checks this on every update. It held through reseeds, seed changes and species-count changes
-- the stress rule is `mortality x (1 - viability)`. With mortality 0.04 and the measured mean viability it predicts 0.00533 deaths per plant per step. Counted over 200 steps on about 15,800 plants it was 0.00525
+- the stress rule is `mortality x (1 - viability)`. With mortality 0.04 and the measured mean viability it predicts 0.00522 deaths per plant per step. Counted over 1,005 steps on about 15,000 plants it was 0.00515. The gap is the 1.2% of plants that old age takes first each step
 
 Viability now takes the weakest of its factors instead of their product, which is the rule in Cordonnier et al. 2017.
 
@@ -209,7 +209,9 @@ Census cost on the GPU, timed with the pass timer from the erosion track (`?trac
 
 #### Lifecycle state
 
-A plant that dies no longer vanishes in one step. It wilts for 6 steps first, counted in the state texture's alpha channel, and `PlantInstance` carries `wilt` from 0 to 1 next to `age` and `viability`. A wilting plant keeps its cell but neither seeds nor crowds its neighbours. The flower shader shrinks and browns it as a stand-in until the lifecycle animation lands. The `lifecycle` view shows age and wilting per cell.
+A plant that dies no longer vanishes in one step. It wilts first, then its cell frees up. The lifecycle itself is Lilian's: each plant gets its own lifespan and its own wilt length, 3 to 15 steps, and her flower shader animates growth, bloom and wilting from it. The state texture's alpha channel holds the plant's seed and the wilt steps left.
+
+The ecosystem side fits onto that. A wilting plant keeps its cell but neither seeds nor crowds its neighbours. The census counts wilting plants apart from living ones, and a death is counted when the wilt starts. The `lifecycle` view shows age and wilting per cell.
 
 #### Where species grow on the eroded terrain
 
@@ -220,8 +222,8 @@ The `habitat` view colors every cell by the species that fits it best, occupied 
 | Habitat before erosion | 23.3% | 7.9% | 8.5% | 2.8% | 42.5% |
 | Habitat at 30k steps | 21.7% | 6.8% | 9.2% | 3.5% | 41.2% |
 | Viability at 30k steps of plants placed before erosion | 0.64 | 0.60 | 0.60 | 0.76 | |
-| Viability after reseeding and 300 steps of `play` | 0.88 | 0.90 | 0.82 | 0.86 | |
-| Plants after reseeding and 300 steps of `play` | 9,665 | 1,529 | 2,971 | 1,460 | 15,625 |
+| Viability after reseeding and 300 steps of `play` | 0.88 | 0.90 | 0.83 | 0.86 | |
+| Plants after reseeding and 300 steps of `play` | 9,296 | 1,413 | 2,854 | 1,437 | 15,000 |
 
 *Seed 1, default settings, 512 x 512.*
 
@@ -256,8 +258,8 @@ Defined in `src/core/layout.ts` so the three tracks merge cleanly:
 
 - grid 512 x 512 cells over a 100-unit world
 - height and moisture: `r32float` textures, values in [0, 1]
-- plant state: `rgba8uint` texture, r = species (0 empty), g = age, b = viability, a = wilt step (0 healthy)
-- `PlantInstance`: 32 bytes, position, species, rotation, age, viability, wilt
+- plant state: `rgba8uint` texture, r = species (0 empty), g = age, b = viability, a = plant seed in the low 4 bits and wilt steps left in the high 4 (0 healthy)
+- `PlantInstance`: 32 bytes, position, species, rotation, size, open, wilt
 - `Wind`: 24-byte uniform with direction, offset, strength and time, bound by the flowers, clouds and rain
 - indirect draw args, instance count filled on the GPU
 

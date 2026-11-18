@@ -7,7 +7,6 @@ import {
   FLOWER_BUDGET,
   SKY_COLOR,
   WATER_LEVEL,
-  WILT_STEPS,
   EVENT_KINDS,
   MSAA_SAMPLES,
 } from './layout';
@@ -20,7 +19,6 @@ const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
 const WATER_LEVEL = ${WATER_LEVEL}f;
 const SKY = vec3f(${SKY_COLOR.join(', ')});
 const MAX_SPECIES = ${MAX_SPECIES}u;
-const WILT_STEPS = ${WILT_STEPS}u;
 const EVENT_KINDS = ${EVENT_KINDS}u;
 ${Object.entries(FLOWER_BUDGET)
   .map(([k, v]) => `const ${k} = ${v}u;`)

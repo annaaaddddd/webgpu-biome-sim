@@ -103,8 +103,11 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     }
     default: {
       // young to old, brown while wilting
-      let age = mix(vec3f(0.5, 0.9, 0.4), vec3f(0.95, 0.85, 0.3), f32(cell.g) / f32(sim.lifespan));
-      let stage = mix(age, vec3f(0.45, 0.25, 0.1), f32(cell.a) / f32(WILT_STEPS));
+      let lc = lifecycle(vec2u(p), plantSeed(cell.a), sim.lifespan);
+      let left = wiltLeft(cell.a);
+      let wilt = select(0.0, 1.0 - (f32(left) - 1.0) / f32(lc.wiltSteps), left > 0u);
+      let age = mix(vec3f(0.5, 0.9, 0.4), vec3f(0.95, 0.85, 0.3), f32(cell.g) / lc.life);
+      let stage = mix(age, vec3f(0.45, 0.25, 0.1), wilt);
       color = select(vec3f(0.08), stage, cell.r != 0u);
     }
   }

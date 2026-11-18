@@ -36,7 +36,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       if (cell.r != id + 1u) {
         continue;
       }
-      if (cell.a == 0u) {
+      if (wiltLeft(cell.a) == 0u) {
         alive[id]++;
         viable[id] += v;
       } else {
