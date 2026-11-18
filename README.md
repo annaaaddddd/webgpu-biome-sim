@@ -81,10 +81,20 @@ M1 timing (the M1 passes and defaults, before the M2 transport rewrite): one ful
 
 ### Ecosystem track
 
+Planned for M1: species placement over a terrain and a live or die time step. Done, on a stand-in terrain until the erosion track merged.
+
 Rules follow Cordonnier et al. 2017, cut down to live or die. Every cell scores each species
 on height, slope and moisture. Empty cells get seeded from plants nearby, occupied cells age
-and die faster the worse they fit. `play` steps the simulation, `view` switches between the
-shaded scene and the height, moisture, slope, species and viability maps.
+and die faster the worse they fit.
+
+Everything runs on the GPU in three passes:
+
+- step: one compute pass over the 512 x 512 grid applies the rules to every cell
+- compact: a second pass packs the living plants into one instance list and counts them
+- draw: one indirect draw call for all plants, so the CPU never learns how many there are
+
+`play` steps the simulation, `view` switches between the shaded scene and the height,
+moisture, slope, species and viability maps.
 
 ### Parametric track
 
@@ -170,7 +180,7 @@ Planned: ground-level navigation, wind controls with flower sway, a check of whe
 
 ![Walking through the meadow in wind and rain](media/ecosystem/eco_m2_walk.jpg)
 
-*Seed 1 at 150k erosion steps, wind strength 1.6, rain rate 0.002.*
+*Seed 1 at 60k erosion steps, wind strength 1.9, rain rate 0.002.*
 
 #### Walking and wind
 
@@ -184,7 +194,7 @@ Planned: ground-level navigation, wind controls with flower sway, a check of whe
 
 ![Population panel over the map](media/ecosystem/eco_m2_census.jpg)
 
-*Seed 1 at 150k erosion steps with `play` on.*
+*Seed 1 at 60k erosion steps with `play` on.*
 
 The step pass also counts births, split into seeded by a neighbour and sprouted from the seed bank, and deaths by cause: stress, crowding and old age. Two checks come out of that:
 
