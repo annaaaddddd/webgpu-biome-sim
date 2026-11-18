@@ -1,5 +1,31 @@
 import { device, canvas, canvasFormat } from './device';
-import { MSAA_SAMPLES } from './layout';
+import {
+  GRID,
+  WORLD_SIZE,
+  HEIGHT_SCALE,
+  MAX_SPECIES,
+  FLOWER_BUDGET,
+  SKY_COLOR,
+  WATER_LEVEL,
+  MSAA_SAMPLES,
+} from './layout';
+import commonWgsl from '../shaders/common.wgsl?raw';
+
+const prelude = `
+const GRID = ${GRID}u;
+const WORLD_SIZE = ${WORLD_SIZE}f;
+const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
+const WATER_LEVEL = ${WATER_LEVEL}f;
+const SKY = vec3f(${SKY_COLOR.join(', ')});
+const MAX_SPECIES = ${MAX_SPECIES}u;
+${Object.entries(FLOWER_BUDGET)
+  .map(([k, v]) => `const ${k} = ${v}u;`)
+  .join('\n')}
+`;
+
+export function shaderModule(code: string) {
+  return device.createShaderModule({ code: prelude + commonWgsl + code });
+}
 
 // Pass a byte size for an empty buffer, or initial data to upload.
 export function createBuffer(usage: GPUBufferUsageFlags, init: number | BufferSource) {

@@ -5,23 +5,20 @@ import { device, context, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import {
   GRID,
-  WORLD_SIZE,
-  HEIGHT_SCALE,
   MAX_SPECIES,
   TERRAIN_FORMAT,
   STATE_FORMAT,
   PLANT_INSTANCE_BYTES,
   DRAW_ARGS_BYTES,
-  FLOWER_BUDGET,
   FLOWER_VERTS,
   SKY_COLOR,
-  WATER_LEVEL,
   MSAA_SAMPLES,
 } from '../core/layout';
-import { createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
+import { shaderModule, createBuffer, createGridTexture, createBindGroup, dispatchGrid, RenderTargets } from '../core/gpu';
 import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
-import commonWgsl from '../shaders/common.wgsl?raw';
+import { ErosionSim } from '../sim/erosion_sim';
+import { Rain } from '../sim/rain';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
@@ -38,31 +35,15 @@ const SPECIES = [
   [0.6, 0.9, 0.0, 0.7, 0.7, 0.08],
 ];
 
-const prelude = `
-const GRID = ${GRID}u;
-const WORLD_SIZE = ${WORLD_SIZE}f;
-const HEIGHT_SCALE = ${HEIGHT_SCALE}f;
-const WATER_LEVEL = ${WATER_LEVEL}f;
-const SKY = vec3f(${SKY_COLOR.join(', ')});
-const MAX_SPECIES = ${MAX_SPECIES}u;
-${Object.entries(FLOWER_BUDGET)
-  .map(([k, v]) => `const ${k} = ${v}u;`)
-  .join('\n')}
-`;
-
 const B = GPUBufferUsage;
 const T = GPUTextureUsage;
 
-function shader(code: string) {
-  return device.createShaderModule({ code: prelude + commonWgsl + code });
-}
-
 function computePipeline(code: string) {
-  return device.createComputePipeline({ layout: 'auto', compute: { module: shader(code) } });
+  return device.createComputePipeline({ layout: 'auto', compute: { module: shaderModule(code) } });
 }
 
 function renderPipeline(code: string, buffers: GPUVertexBufferLayout[] = []) {
-  const module = shader(code);
+  const module = shaderModule(code);
   return device.createRenderPipeline({
     layout: 'auto',
     vertex: { module, buffers },
@@ -95,6 +76,8 @@ export class EcosystemTrack implements Track {
 
   private height = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
   private moisture = createGridTexture(GRID, TERRAIN_FORMAT, T.TEXTURE_BINDING | T.STORAGE_BINDING);
+  private erosion = new ErosionSim(this.height, this.moisture);
+  private useStub = new URLSearchParams(location.search).get('terrain') === 'stub';
   private state = createGridTexture(GRID, STATE_FORMAT, T.TEXTURE_BINDING | T.COPY_DST);
   private stateNext = createGridTexture(GRID, STATE_FORMAT, T.STORAGE_BINDING | T.COPY_SRC);
 
@@ -107,7 +90,9 @@ export class EcosystemTrack implements Track {
 
   private terrainIndexCount = (GRID - 1) * (GRID - 1) * 6;
   private terrainIndexBuffer = createBuffer(B.INDEX, terrainIndices(GRID));
-  
+
+  private rain = new Rain(this.height);
+
   // Use per-species flower shape (created before bind groups use buffer)
   private flowers = new Flowers();
 
@@ -144,9 +129,9 @@ export class EcosystemTrack implements Track {
     { buffer: this.flowers.buffer }
   ]);
   private plantsBindGroup = createBindGroup(
-    this.plantsPipeline, 
+    this.plantsPipeline,
     [
-      { buffer: camera.uniformBuffer }, 
+      { buffer: camera.uniformBuffer },
       { buffer: this.instances },
       { buffer: this.flowers.buffer }
     ]
@@ -168,20 +153,31 @@ export class EcosystemTrack implements Track {
     gui.add(s, 'view', VIEWS);
     gui.add(s, 'showPlants');
     gui.add({ reseed: () => (this.stateDirty = true) }, 'reseed');
+
     this.flowers.addGui(gui);
+    const erosionFolder = gui.addFolder('Erosion');
+    this.erosion.addGui(erosionFolder, false);
+    this.rain.addGui(erosionFolder);
   }
 
   frame(encoder: GPUCommandEncoder, dt: number) {
     this.targets.update();
     if (this.terrainDirty) this.generateTerrain(encoder);
+    if (!this.useStub) this.erosion.frame(encoder);
+    this.rain.update(dt, this.erosion.sim.rainRate);
     if (this.stateDirty || this.takeStep(dt)) this.step(encoder);
     this.compact(encoder);
     this.draw(encoder);
   }
 
   private generateTerrain(encoder: GPUCommandEncoder) {
-    device.queue.writeBuffer(this.stubParams, 0, new Float32Array([this.settings.seed]));
-    dispatchGrid(encoder, this.stubPipeline, this.stubBindGroup, GRID);
+    if (this.useStub) {
+      device.queue.writeBuffer(this.stubParams, 0, new Float32Array([this.settings.seed]));
+      dispatchGrid(encoder, this.stubPipeline, this.stubBindGroup, GRID);
+    } else {
+      this.erosion.seed = this.settings.seed;
+      this.erosion.dirty = true;
+    }
     this.terrainDirty = false;
     this.stateDirty = true;
   }
@@ -242,6 +238,7 @@ export class EcosystemTrack implements Track {
       pass.setBindGroup(0, this.plantsBindGroup);
       pass.drawIndirect(this.drawArgs, 0);
     }
+    this.rain.draw(pass);
     pass.end();
   }
 }
