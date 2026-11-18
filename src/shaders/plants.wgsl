@@ -17,6 +17,7 @@ struct VSOut {
 const PI = 3.14159265;
 const TAU = 6.2831853;
 const GOLDEN_ANGLE = 2.3999632;
+const WILT_BROWN = vec3f(0.36, 0.26, 0.14);
 
 // quads per part
 const STEM_Q = STEM_U * STEM_V;
@@ -118,6 +119,11 @@ fn partColor(p: FlowerParams, kind: u32) -> vec3f {
   return p.stemColor.rgb;
 }
 
+// petal wilt: seed is plant's rotation
+fn petalFallen(seed: u32, i: u32, wilt: f32) -> bool {
+  return wilt > mix(0.3, 0.95, rand3(vec3u(seed, i, 0x7e7au)).x);
+}
+
 // SURFACE FUNCTIONS: In "flower space", y is up and base is at the flower's origin.
 
 fn rotY(a: f32) -> mat3x3f {
@@ -167,8 +173,9 @@ fn leafPos(p: FlowerParams, i: u32, uv: vec2f) -> vec3f {
 }
 
 // Petals crown the head
-fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32) -> vec3f {
-  let tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
+fn petalPos(p: FlowerParams, i: u32, uv: vec2f, open: f32, wilt: f32) -> vec3f {
+  var tilt = mix(1.35, mix(0.05, 1.1, p.petalCup), open);
+  tilt = mix(tilt, -0.9, wilt * wilt); // wilting petals sag below horizontal
   let dir = vec3f(cos(tilt), sin(tilt), 0.0);
   let up = vec3f(-sin(tilt), cos(tilt), 0.0);
   let halfW = 0.5 * p.petalWidth * sin(PI * pow(uv.x, 0.6));
@@ -197,7 +204,7 @@ fn centerPos(p: FlowerParams, uv: vec2f) -> vec3f {
   return spine(p, 1.0) + headFrame(p) * local;
 }
 
-fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
+fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32, wilt: f32) -> vec3f {
   if (pv.kind == PART_STEM) {
     return stemPos(p, uv);
   }
@@ -205,7 +212,7 @@ fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
     return leafPos(p, pv.index, uv);
   }
   if (pv.kind == PART_PETAL) {
-    return petalPos(p, pv.index, uv, open);
+    return petalPos(p, pv.index, uv, open, wilt);
   }
   return centerPos(p, uv);
 }
@@ -215,16 +222,25 @@ fn partPos(pv: PartVertex, p: FlowerParams, uv: vec2f, open: f32) -> vec3f {
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
   let inst = instances[ii];
-  let fp = flowers[min(inst.species - 1u, MAX_SPECIES - 1u)];
   let pv = decode(vi);
-  let open = smoothstep(2.0, 10.0, inst.age);
-  let size = plantSize(inst.age, inst.viability) * inst.fade;
+  let open = inst.open;
+  let wilt = inst.wilt;
+  let size = inst.size; // already includes growth, viability, wilt shrink and cull fade
+
+  // wilting wil change local copy of species shape
+  // flower droops, stem bends, leaves wilt
+  var fp = flowers[min(inst.species - 1u, MAX_SPECIES - 1u)];
+  fp.stemBend += 0.5 * fp.stemHeight * wilt * wilt;
+  fp.leafDroop += 0.3 * wilt;
+  fp.centerRadius *= 1.0 - 0.3 * wilt;
   
   // per-part culling
   let pixelsPerUnit = size * cam.pixelScale / max(distance(inst.pos, cam.pos), 1e-3);
 
   var out: VSOut;
-  if (!partEnabled(fp, pv) || !partVisible(fp, pv.kind, pixelsPerUnit)) {
+  let fallen = pv.kind == PART_PETAL 
+              && petalFallen(bitcast<u32>(inst.rotation), pv.index, wilt);
+  if (!partEnabled(fp, pv) || !partVisible(fp, pv.kind, pixelsPerUnit) || fallen) {
     out.clip = vec4f(2.0, 2.0, 2.0, 1.0); // all vertices of plant go to designated "zero" area
     return out;
   }
@@ -232,17 +248,21 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut
   // compute normal from the surface differences; new parts need position dunction
   let e = 2e-3;
   let uvn = clamp(pv.uv, vec2f(0.02), vec2f(0.98));
-  let p0 = partPos(pv, fp, uvn, open);
-  let du = partPos(pv, fp, uvn + vec2f(e, 0.0), open) - p0;
-  let dv = partPos(pv, fp, uvn + vec2f(0.0, e), open) - p0;
+  let p0 = partPos(pv, fp, uvn, open, wilt);
+  let du = partPos(pv, fp, uvn + vec2f(e, 0.0), open, wilt) - p0;
+  let dv = partPos(pv, fp, uvn + vec2f(0.0, e), open, wilt) - p0;
 
   let c = cross(dv, du);
   let n = select(vec3f(0.0, 1.0, 0.0), normalize(c), dot(c, c) > 1e-24);
 
   let rot = rotY(inst.rotation);
-  out.world = inst.pos + rot * partPos(pv, fp, pv.uv, open) * size;
+  out.world = inst.pos + rot * partPos(pv, fp, pv.uv, open, wilt) * size;
   out.normal = rot * n;
-  out.color = partColor(fp, pv.kind);
+  
+  // browns as it wilts, petals will brown faster than the stem
+  let brown = smoothstep(0.15, 0.85, wilt) * select(0.6, 0.9, pv.kind == PART_PETAL);
+  out.color = mix(partColor(fp, pv.kind), WILT_BROWN, brown);
+
   out.clip = cam.viewProj * vec4f(out.world, 1.0);
   return out;
 }

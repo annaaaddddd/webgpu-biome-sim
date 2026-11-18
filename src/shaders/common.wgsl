@@ -11,14 +11,56 @@ struct PlantInstance {
   pos: vec3f,
   species: u32,
   rotation: f32,
-  age: f32,
-  viability: f32,
-  fade: f32, // size: 0 -> 1 depending on flower proximity to cull size
+  size: f32, // growth, viability, wilt shrink cull fade affects draw scale
+  open: f32, // 0 -> 1: budding -> fully opened
+  wilt: f32 // 0 -> 1: healthy -> dying
 }
 
-// Growth scale for culling (compact) and drawing (plants)
-fn plantSize(age: f32, viability: f32) -> f32 {
-  return smoothstep(0.0, 4.0, age) * (0.6 + 0.6 * viability);
+// plant lifecycle (ecosystem controls when plant dies, compact controls look)
+// state.a has per-plant seed, then the wilt is a countdown in steps
+// 0: not wilting
+// timing is then a fraction of the plant's lifespan:
+// jittered per plant, hashed cell with seed, allows for more sprouting/blooming/wilting randomization
+const MAX_WILT_STEPS = 15u; // 4 bit countdown
+
+struct Lifecycle {
+  life: f32, // lifespan in steps
+  growSteps: f32, // sprout to full size
+  bloomStart: f32, // age when petals begin to open
+  bloomSteps: f32, // bud -> fully open
+  wiltSteps: u32 // length of wilt (3 to MAX_WILT_STEPS)
+}
+
+fn plantSeed(a: u32) -> u32 {
+  return a & 15u;
+}
+
+fn wiltLeft(a: u32) -> u32 {
+  return a >> 4u;
+}
+
+fn packPlantA(seed: u32, countdown: u32) -> u32 {
+  return (seed & 15u) | (min(countdown, MAX_WILT_STEPS) << 4u);
+}
+
+fn lifecycle(cell: vec2u, seed: u32, lifespan: u32) -> Lifecycle {
+  let j = rand3(vec3u(cell, seed + 0x5eedu));
+  let k = rand3(vec3u(cell.yx, seed + 0xb100u));
+
+  var lc: Lifecycle;
+
+  lc.life = min(f32(lifespan) * mix(0.7, 1.3, j.x), 255.0);
+  lc.growSteps = max(2.0, lc.life * mix(0.04, 0.1, j.y));
+  lc.bloomStart = lc.growSteps * mix(0.4, 0.9, k.x);
+  lc.bloomSteps = max(2.0, lc.life * mix(0.04, 0.12, k.y));
+  lc.wiltSteps = u32(
+    clamp(
+      lc.life * mix(0.08, 0.2, j.z),
+      3.0,
+      f32(MAX_WILT_STEPS))
+  );
+  
+  return lc;
 }
 
 const SUN_DIR = vec3f(0.645, 0.591, 0.484);

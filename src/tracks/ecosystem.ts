@@ -69,6 +69,9 @@ export class EcosystemTrack implements Track {
   };
 
   private cullCamera = createBuffer(B.UNIFORM | B.COPY_DST, 80);
+  // animation in compact.wgsl: stepPhase (f32), lifespan (u32), padded to 16 bytes
+  private animData = new ArrayBuffer(16);
+  private animParams = createBuffer(B.UNIFORM | B.COPY_DST, 16);
   private terrainDirty = true;
   private stateDirty = true;
   private stepIndex = 0;
@@ -123,6 +126,7 @@ export class EcosystemTrack implements Track {
     { buffer: this.drawArgs }, 
     { buffer: this.cullCamera },
     { buffer: this.flowers.buffer },
+    { buffer: this.animParams }
   ]);
   private terrainBindGroup = createBindGroup(this.terrainPipeline, [
     { buffer: camera.uniformBuffer },
@@ -210,6 +214,13 @@ export class EcosystemTrack implements Track {
 
   private compact(encoder: GPUCommandEncoder) {
     device.queue.writeBuffer(this.drawArgs, 0, new Uint32Array([FLOWER_VERTS,0, 0, 0]));
+    // stepBudget = how far toward next step
+    // important for moosth growth/wilting
+    new Float32Array(this.animData)[0] = Math.min(this.stepBudget, 1);
+    new Uint32Array(this.animData)[1] = this.settings.lifespan;
+
+    device.queue.writeBuffer(this.animParams, 0, this.animData);
+    
     if (!this.settings.freezeCulling) {
       encoder.copyBufferToBuffer(camera.uniformBuffer, 0, this.cullCamera, 0, 80);
     }

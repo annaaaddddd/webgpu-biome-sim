@@ -96,12 +96,12 @@ export class Flowers {
             const o = (i * FLOWER_PARAMS_BYTES) / 4;
 
             const reach = Math.max(
-                f.leafLength + f.stemRadius, 
-                0.8 * f.centerRadius + f.petalLength
-            ) + Math.abs(f.stemBend);
+                f.leafLength + f.stemRadius,
+                0.8 * f.centerRadius + f.petalLength)
+                + Math.abs(f.stemBend) + 0.5 * f.stemHeight; // add bend to accomodate for wilt
 
             const top = f.stemHeight + Math.max(f.petalLength, 0.6 * f.centerRadius);
-            
+
             f32[o + 14] = top / 2; // boundCenterY
             f32[o + 15] = Math.hypot(reach, top / 2); // boundRadius
             u32[o] = +f.stem | (+f.leaves << 1) | (+f.petals << 2) | (+f.center << 3);

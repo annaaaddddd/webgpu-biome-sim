@@ -56,8 +56,8 @@ fn bestSpecies(h: f32, slope: f32, m: f32) -> Pick {
   return best;
 }
 
-fn plant(id: u32, age: u32, v: f32) -> vec4u {
-  return vec4u(id + 1u, age, u32(v * 255.0), 0u);
+fn plant(id: u32, age: u32, v: f32, a: u32) -> vec4u {
+  return vec4u(id + 1u, min(age, 255u), u32(v * 255.0), a);
 }
 
 // Species in the i-th cell of the (2r+1)^2 square around p, skipping p itself.
@@ -77,44 +77,81 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let m = textureLoad(moistureTex, p, 0).r;
   let slope = gradientSlope(heightGradient(heightTex, p));
   let rnd = rand3(vec3u(gid.xy, sim.frame));
+  let newSeed = u32(
+    rand3(vec3u(gid.yx, sim.frame + 7919u)).x * 16.0
+  ) & 15u; // for plants born this step
+
   var cell = vec4u(0u);
 
   if (sim.mode == 0u) {
     let best = bestSpecies(h, slope, m);
     if (rnd.x < best.viability * best.viability * sim.spawnRate * 0.3) {
-      cell = plant(best.id, u32(mix(0.3, 0.7, rnd.y) * f32(sim.lifespan)), best.viability);
+      cell = plant(
+        best.id,
+        u32(mix(0.3, 0.7, rnd.y) * f32(sim.lifespan)),
+        best.viability,
+        packPlantA(newSeed, 0u)
+      );
     }
+
     textureStore(stateOut, p, cell);
     return;
   }
 
   cell = textureLoad(stateIn, p, 0);
   var occupied = 0u;
+
+  for (var i = 0u; i < 8u; i++) {
+    occupied += u32(neighborSpecies(p, 1, i) != 0u);
+  }
+
   for (var i = 0u; i < 8u; i++) {
     occupied += u32(neighborSpecies(p, 1, i) != 0u);
   }
 
   if (cell.r != 0u) {
     let v = viability(cell.r - 1u, h, slope, m);
-    let death = sim.mortality * (1.0 - v) + select(0.0, 0.25, occupied >= CROWDED_NEIGHBORS);
-    if (cell.g + 1u > sim.lifespan || rnd.x < death) {
+    let seed = plantSeed(cell.a);
+    let lc = lifecycle(gid.xy, seed, sim.lifespan);
+    let age = cell.g + 1u;
+    
+    var left = wiltLeft(cell.a);
+
+    if (left > 0u) {
+      // already wilting: count down, remove when it runs out
+      left -= 1u;
+    } else {
+      let death = sim.mortality * (1.0 - v) + select(0.0, 0.25, occupied >= CROWDED_NEIGHBORS);
+      
+      if (f32(age) >= lc.life - f32(lc.wiltSteps) || rnd.x < death) {
+        left = lc.wiltSteps; // start wilting instead of vanishing
+      }
+    }
+
+    let wiltedOut = wiltLeft(cell.a) > 0u && left == 0u;
+
+    if (wiltedOut) {
       cell = vec4u(0u);
     } else {
-      cell = plant(cell.r - 1u, cell.g + 1u, v);
+      cell = plant(cell.r - 1u, age, v, packPlantA(seed, left));
     }
   } else {
     let parent = neighborSpecies(p, 2, u32(rnd.z * 24.0));
+
     if (parent != 0u && occupied == 0u) {
       let v = viability(parent - 1u, h, slope, m);
+
       if (rnd.y < sim.spawnRate * v * v) {
-        cell = plant(parent - 1u, 0u, v);
+        cell = plant(parent - 1u, 0u, v, packPlantA(newSeed, 0u));
       }
     } else if (rnd.y < 0.0005) {
       let best = bestSpecies(h, slope, m);
+
       if (best.viability > 0.5) {
-        cell = plant(best.id, 0u, best.viability);
+        cell = plant(best.id, 0u, best.viability, packPlantA(newSeed, 0u));
       }
     }
   }
+
   textureStore(stateOut, p, cell);
 }
