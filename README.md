@@ -229,6 +229,10 @@ Flowers are now subjected to a per-part shader that more rigorously colors each 
 
 The vertex shader is improved to modify each species' FlowerParams locally, as the wilt parameter goes from 0 to 1.  The stem bends further, and the head frame follows (center and petals); the petals droop below the horizontal and each petal will randomly drop, seeded by plant rotation.  This is because the instance index changes order per frame.  Brown wilting and size shrinking is applied to a flower as it approaches death.  VSOut carries patch uv information, part type, a per-petal variation value (for petal jittering), and wilt value to the fragment shader.
 
+<img width="911" height="589" alt="image" src="https://github.com/user-attachments/assets/89a83320-24ce-475d-b521-9d88f4d72ddc" />
+
+<img width="776" height="564" alt="image" src="https://github.com/user-attachments/assets/a278688d-718a-46be-b088-d63e067b979b" />
+
 #### Where species grow on the eroded terrain
 
 The `habitat` view colors every cell by the species that fits it best, occupied or not, next to the `species` view of where plants are.
