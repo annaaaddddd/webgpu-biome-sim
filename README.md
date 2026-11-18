@@ -223,6 +223,12 @@ A plant that dies no longer vanishes in one step. It wilts first, then its cell 
 
 The ecosystem side fits onto that. A wilting plant keeps its cell but neither seeds nor crowds its neighbours. The census counts wilting plants apart from living ones, and a death is counted when the wilt starts. The `lifecycle` view shows age and wilting per cell.
 
+#### Flower Shading
+
+Flowers are now subjected to a per-part shader that more rigorously colors each petal, with slight transmission to help the effect of petal thinness, gradient coloration across each petal, sin-based petal veining, ambient and fog lighting, and health-based translucency.  An array of parameters affect the shading of each flower; translucency lessens as a petal wilts, simulating flower dryness as it approaches death.  Transmissive light is stronger at thin edges and when facing the sun, tinted by albedo for saturation.
+
+The vertex shader is improved to modify each species' FlowerParams locally, as the wilt parameter goes from 0 to 1.  The stem bends further, and the head frame follows (center and petals); the petals droop below the horizontal and each petal will randomly drop, seeded by plant rotation.  This is because the instance index changes order per frame.  Brown wilting and size shrinking is applied to a flower as it approaches death.  VSOut carries patch uv information, part type, a per-petal variation value (for petal jittering), and wilt value to the fragment shader.
+
 #### Where species grow on the eroded terrain
 
 The `habitat` view colors every cell by the species that fits it best, occupied or not, next to the `species` view of where plants are.
