@@ -44,7 +44,7 @@ export class ErosionSim {
     maxDepth: 0.01,  // water depth at which erosion reaches full strength
     Kt: 0.05,
     talus: 0.025,    // height units; heights are in [0,1], so 0.025 is about 66 deg at 18x height scale
-    creep: 0.004,    // soil creep on every slope; 0 lets water erosion steepen all land to the talus angle
+    creep: 0.002,    // soil creep on every slope; 0 lets water erosion steepen all land to the talus angle
     moistureTau: 2.0, // time constant for moisture to follow water depth (see export.wgsl)
     baseline: 1.0,    // weight of the height/noise moisture baseline; 0 = water only
   };
@@ -336,9 +336,13 @@ export class ErosionSim {
     if (this.dirty) this.reset(encoder);
     this.bench?.beginFrame();
 
+    // The water passes are explicit: past cellSize / (2 sqrt(pipeCoeff)) the water depth breaks
+    // into a checkerboard, so the step stays under it.
+    const dt = Math.min(this.sim.dt, (0.9 * cellSize) / (2 * Math.sqrt(this.sim.pipeCoeff)));
+
     // Field order must match SimParams.
     device.queue.writeBuffer(this.simUniforms, 0, new Float32Array([
-      this.sim.dt,
+      dt,
       this.sim.rainRate,
       this.sim.moistureScale,
       this.sim.pipeCoeff,
@@ -352,7 +356,7 @@ export class ErosionSim {
       this.sim.maxDepth,
       this.sim.talus,
       this.sim.moistureTau,
-      this.sim.dt * this.sim.stepsPerFrame,
+      dt * this.sim.stepsPerFrame,
       this.seed,
       this.sim.baseline,
       this.sim.creep,

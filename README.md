@@ -176,16 +176,16 @@ With open edges, land is no longer conserved. What leaves is sediment that water
 
 ### Ximing: walking, wind, population census, lifecycle
 
-Planned: ground-level navigation, wind controls with flower sway, a check of where species grow on the eroded terrain, per-species population counts on the GPU with seeding and mortality verified, and lifecycle state for flower animation. All of it is done. Two fixes came up while checking the merged terrain, soil creep in the erosion and flooded plants.
+Planned: ground-level navigation, wind controls with flower sway, a check of where species grow on the eroded terrain, per-species population counts on the GPU with seeding and mortality verified, and lifecycle state for flower animation. All of it is done. Three fixes came up while checking the merged terrain: soil creep in the erosion, a limit on the erosion time step, and flooded plants.
 
 ![Walking through the meadow in wind and rain](media/ecosystem/eco_m2_walk.jpg)
 
-*Seed 1 at 60k erosion steps, wind strength 1.9, rain rate 0.002.*
+*Seed 1 at 60k erosion steps, wind strength 1.9, rain rate 0.002, soil creep 0.002.*
 
 #### Walking and wind
 
 - `walk (WASD)` puts the camera at eye height. Drag to look, WASD to move, Shift to run. The terrain only exists on the GPU and erosion rewrites it every frame, so the height under the camera is read back one texel at a time and the camera eases toward it
-- the `Wind` folder sets one direction and strength for the whole scene. Flowers bend downwind along an arc from the base to the top of the stem, so leaves and the head tilt with it, in gusts that travel with the wind. Clouds drift along it and rain streaks slant with it
+- the `Wind` folder sets one direction and strength for the whole scene. Flowers bend downwind along an arc from the base to the top of the stem, so leaves and the head tilt with it, in gusts that travel with the wind. Clouds drift along it and rain streaks slant with it, and neither has a speed or direction setting of its own
 - the shaded view decides water from the height of the surface at each pixel instead of once per cell, which removes a saw-tooth edge along steep shores
 
 #### Population census
@@ -199,7 +199,7 @@ Planned: ground-level navigation, wind controls with flower sway, a check of whe
 The step pass also counts births, split into seeded by a neighbour and sprouted from the seed bank, and deaths by cause: stress, crowding and old age. Two checks come out of that:
 
 - every living plant was born once and has not died, so births minus deaths must equal the count. The panel checks this on every update. It held through reseeds, seed changes and species-count changes
-- the stress rule is `mortality x (1 - viability)`. With mortality 0.04 and the measured mean viability it predicts 0.00522 deaths per plant per step. Counted over 1,005 steps on about 15,000 plants it was 0.00515. The gap is the 1.2% of plants that old age takes first each step
+- the stress rule is `mortality x (1 - viability)`. With mortality 0.04 and the measured mean viability it predicts 0.00521 deaths per plant per step. Counted over 1,001 steps on about 13,600 plants it was 0.00514. The gap is the 1.2% of plants that old age takes first each step
 
 Viability now takes the weakest of its factors instead of their product, which is the rule in Cordonnier et al. 2017.
 
@@ -250,10 +250,10 @@ The `habitat` view colors every cell by the species that fits it best, occupied 
 | | Species 1 | Species 2 | Species 3 | Species 4 | All |
 | --- | --- | --- | --- | --- | --- |
 | Habitat before erosion | 23.3% | 7.9% | 8.5% | 2.8% | 42.5% |
-| Habitat at 30k steps | 21.7% | 6.8% | 9.2% | 3.5% | 41.2% |
-| Viability at 30k steps of plants placed before erosion | 0.64 | 0.60 | 0.60 | 0.76 | |
-| Viability after reseeding and 300 steps of `play` | 0.88 | 0.90 | 0.83 | 0.86 | |
-| Plants after reseeding and 300 steps of `play` | 9,296 | 1,413 | 2,854 | 1,437 | 15,000 |
+| Habitat at 30k steps | 20.0% | 5.8% | 8.0% | 3.0% | 36.8% |
+| Viability at 30k steps of plants placed before erosion | 0.61 | 0.55 | 0.58 | 0.73 | |
+| Viability after reseeding and 300 steps of `play` | 0.88 | 0.89 | 0.83 | 0.85 | |
+| Plants after reseeding and 300 steps of `play` | 8,675 | 1,224 | 2,433 | 1,257 | 13,589 |
 
 *Seed 1, default settings, 512 x 512.*
 
@@ -263,24 +263,39 @@ All four species keep habitat on the eroded map. A placement made before erosion
 
 Left running, the erosion turned all land into needles. Measuring the steepest slope at every land cell showed why. The share of land at 60 to 70 degrees went from 12.9% before erosion to 52.0% at 100k steps. Water erosion only cuts where water is deep and fast, so channels keep deepening while the ground between them never erodes, and the thermal pass only moved material on slopes steeper than the talus limit of 66 degrees. All land steepened up to that limit and stopped there.
 
-The thermal pass now also has soil creep, a small flow down every slope (`soil creep` under Thermal erosion, default 0.004). Lowering the talus limit was tried first and only turned 66 degree needles into 43 degree pyramids.
+The thermal pass now also has soil creep, a small flow down every slope (`soil creep` under Thermal erosion, default 0.002). Lowering the talus limit was tried first and only turned 66 degree needles into 43 degree pyramids.
 
-| No creep, 100k steps | Creep 0.004, 100k steps |
+The first default was 0.004, which smoothed too much. The hills rounded off, and only 41% of the fine detail of the un-eroded terrain was left at 100k steps, against 64% at 0.002.
+
+| No creep, 100k steps | Creep 0.002, 100k steps |
 | --- | --- |
 | <img src="media/ecosystem/eco_m2_creep_off.jpg" width="420"> | <img src="media/ecosystem/eco_m2_creep_on.jpg" width="420"> |
 
-| At 100k steps | No creep | Creep 0.004 |
-| --- | --- | --- |
-| Land at 60 to 70 degrees | 52.0% | 18.0% |
-| Spikes per 1,000 land cells | 13.4 | 0.6 |
+| At 100k steps | No creep | Creep 0.002 | Creep 0.004 |
+| --- | --- | --- | --- |
+| Land at 60 to 70 degrees | 52.0% | 26.6% | 18.0% |
+| Spikes per 1,000 land cells | 13.4 | 2.7 | 0.6 |
 
-*Seed 1, default settings, same camera. A spike is a land cell more than 0.003 above all four neighbours. With creep the highest point drops from 0.994 to 0.937.*
+*Seed 1, default settings, same camera. A spike is a land cell more than 0.003 above all four neighbours. Fine detail is the mean difference between a land cell and the average of its four neighbours. With creep 0.002 the highest point drops from 0.992 to 0.950.*
 
-Erosion still never settles. Land keeps leaving through the sea edges, and faster with creep on long runs: 37.1% of the map is under water at 400k steps against 29.5% without. Pausing erosion is still how a map is kept.
+Erosion still never settles. Land keeps leaving through the sea edges, and faster with creep on long runs: 37.1% of the map is under water at 400k steps against 29.5% without, and the share of land at 60 to 70 degrees is back up to 33.3% by then. Pausing erosion is still how a map is kept.
+
+#### Fix: time step limit
+
+Raising the erosion `time step (dt)` covered the ground in a dotted texture. The water passes are explicit, and past a step of `cell size / (2 x sqrt(flow speed))`, 0.098 at the defaults, the water depth breaks into a checkerboard that the moisture map copies. The ground height itself does not get rougher. Raising `flow speed` does the same thing at the default step. The simulation now holds the step at 90% of that limit whatever the two sliders say.
+
+| dt | Flow speed | Limit | Water roughness |
+| --- | --- | --- | --- |
+| 0.095 | 1 | 0.098 | 0.11 |
+| 0.10 | 1 | 0.098 | 1.26 |
+| 0.05 | 6 | 0.040 | 1.04 |
+| 0.20 | 0.2 | 0.218 | 0.08 |
+
+*Seed 1, 300 simulated seconds each, measured before the limit was added. Water roughness is the mean difference between a wet cell's depth and the average of its four neighbours, over the mean depth. With the limit, dt 0.2 gives 0.13 and flow speed 6 gives 0.19.*
 
 #### Fix: flooded plants
 
-Plants are placed once and erosion keeps moving the coast, so with `play` off some ended up standing in the sea. The compact pass now skips a plant when the ground under it is at or below the water level, so it is not drawn. The simulation still holds it, and it dies at the normal rate once `play` is on. At 400k steps with `play` off, 3,539 of 10,863 plants were in flooded cells and none was drawn.
+Plants are placed once and erosion keeps moving the coast, so with `play` off some ended up standing in the sea. The compact pass now skips a plant when the ground under it is at or below the water level, so it is not drawn. The simulation still holds it, and it dies at the normal rate once `play` is on. At 400k steps with `play` off, 3,284 of 11,070 plants were in flooded cells.
 
 ## Shared layout
 

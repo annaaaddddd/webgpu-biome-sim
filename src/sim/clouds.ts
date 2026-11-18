@@ -3,17 +3,17 @@ import { device, canvasFormat } from '../core/device';
 import { camera } from '../core/camera';
 import { HEIGHT_SCALE, WORLD_SIZE, MSAA_SAMPLES } from '../core/layout';
 import { shaderModule } from '../core/gpu';
-import type { Wind } from './wind';
+import { WIND_SPEED, type Wind } from './wind';
 import cloudsWgsl from '../shaders/weather/clouds.wgsl?raw';
 
 const spacing = 1.5; // vertical gap between layers, world units
+const DRIFT = WIND_SPEED / 2; // clouds move at half the wind speed
 
 // A few stacked layers of fbm clouds that drift over the map.
 export class Clouds {
   params = {
     show: true,
     cover: 0.4,
-    speed: 3,       // world units per second at wind strength 1
     scale: 0.045,   // noise frequency; smaller = bigger clouds
     alpha: 0.85,
     layers: 3.0,
@@ -73,7 +73,6 @@ export class Clouds {
     const folder = gui.addFolder('Clouds');
     folder.add(this.params, 'show');
     folder.add(this.params, 'cover', 0, 1);
-    folder.add(this.params, 'speed', 0, 20);
     folder.add(this.params, 'scale', 0.01, 0.1);
     folder.add(this.params, 'alpha', 0, 1);
     folder.add(this.params, 'layers', 1, 5).step(1);
@@ -81,8 +80,8 @@ export class Clouds {
 
   update(dt: number, wind: Wind) {
     const p = this.params;
-    // Accumulate the drift so changing speed or wind does not make the layer jump.
-    const drift = dt * p.speed * wind.params.strength;
+    // Accumulate the drift so changing the wind does not make the layer jump.
+    const drift = dt * DRIFT * wind.params.strength;
     this.offset[0] += wind.dir[0] * drift;
     this.offset[1] += wind.dir[1] * drift;
     device.queue.writeBuffer(this.uniforms, 0, new Float32Array([

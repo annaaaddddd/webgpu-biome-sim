@@ -2,9 +2,10 @@ import type { GUI } from 'lil-gui';
 import { device } from '../core/device';
 import { createBuffer } from '../core/gpu';
 
-const GUST_SPEED = 6; // world units per second at strength 1
+export const WIND_SPEED = 6; // world units per second at strength 1
 
 // One wind for the whole scene: flowers sway with it, clouds drift along it and rain slants with it.
+// Nothing else sets their direction or speed.
 export class Wind {
   params = {
     direction: 20, // degrees, 0 blows toward +x
@@ -26,7 +27,7 @@ export class Wind {
     const angle = (this.params.direction * Math.PI) / 180;
     this.dir = [Math.cos(angle), Math.sin(angle)];
     // Accumulated, so turning the wind does not make the gusts jump.
-    const moved = this.params.strength * GUST_SPEED * dt;
+    const moved = this.params.strength * WIND_SPEED * dt;
     this.offset[0] += this.dir[0] * moved;
     this.offset[1] += this.dir[1] * moved;
     this.time += dt;
