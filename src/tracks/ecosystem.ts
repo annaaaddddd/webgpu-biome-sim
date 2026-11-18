@@ -19,6 +19,7 @@ import { terrainIndices } from './meshes';
 import { Flowers } from './flowers';
 import { ErosionSim } from '../sim/erosion_sim';
 import { Rain } from '../sim/rain';
+import { Clouds } from '../sim/clouds';
 import terrainStubWgsl from '../shaders/terrain_stub.wgsl?raw';
 import ecosystemWgsl from '../shaders/ecosystem.wgsl?raw';
 import compactWgsl from '../shaders/compact.wgsl?raw';
@@ -92,6 +93,7 @@ export class EcosystemTrack implements Track {
   private terrainIndexBuffer = createBuffer(B.INDEX, terrainIndices(GRID));
 
   private rain = new Rain(this.height);
+  private clouds = new Clouds();
 
   // Use per-species flower shape (created before bind groups use buffer)
   private flowers = new Flowers();
@@ -158,6 +160,7 @@ export class EcosystemTrack implements Track {
     const erosionFolder = gui.addFolder('Erosion');
     this.erosion.addGui(erosionFolder, false);
     this.rain.addGui(erosionFolder);
+    this.clouds.addGui(gui);
   }
 
   frame(encoder: GPUCommandEncoder, dt: number) {
@@ -165,6 +168,7 @@ export class EcosystemTrack implements Track {
     if (this.terrainDirty) this.generateTerrain(encoder);
     if (!this.useStub) this.erosion.frame(encoder);
     this.rain.update(dt, this.erosion.sim.rainRate);
+    this.clouds.update(dt);
     if (this.stateDirty || this.takeStep(dt)) this.step(encoder);
     this.compact(encoder);
     this.draw(encoder);
@@ -238,7 +242,14 @@ export class EcosystemTrack implements Track {
       pass.setBindGroup(0, this.plantsBindGroup);
       pass.drawIndirect(this.drawArgs, 0);
     }
-    this.rain.draw(pass);
+    // Neither writes depth, so draw the one farther from the camera first.
+    if (camera.position[1] > this.clouds.height) {
+      this.rain.draw(pass);
+      this.clouds.draw(pass);
+    } else {
+      this.clouds.draw(pass);
+      this.rain.draw(pass);
+    }
     pass.end();
   }
 }
