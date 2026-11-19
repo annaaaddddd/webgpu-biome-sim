@@ -223,26 +223,6 @@ A plant that dies no longer vanishes in one step. It wilts first, then its cell 
 
 The ecosystem side fits onto that. A wilting plant keeps its cell but neither seeds nor crowds its neighbours. The census counts wilting plants apart from living ones, and a death is counted when the wilt starts. The `lifecycle` view shows age and wilting per cell.
 
-#### Flower Shading
-
-Flowers are now subjected to a per-part shader that more rigorously colors each petal, with slight transmission to help the effect of petal thinness, gradient coloration across each petal, sin-based petal veining, ambient and fog lighting, and health-based translucency.  An array of parameters affect the shading of each flower; translucency lessens as a petal wilts, simulating flower dryness as it approaches death.  Transmissive light is stronger at thin edges and when facing the sun, tinted by albedo for saturation.
-
-The vertex shader is improved to modify each species' FlowerParams locally, as the wilt parameter goes from 0 to 1.  The stem bends further, and the head frame follows (center and petals); the petals droop below the horizontal and each petal will randomly drop, seeded by plant rotation.  This is because the instance index changes order per frame.  Brown wilting and size shrinking is applied to a flower as it approaches death.  VSOut carries patch uv information, part type, a per-petal variation value (for petal jittering), and wilt value to the fragment shader.
-
-<img width="770" alt="image" src="https://github.com/user-attachments/assets/89a83320-24ce-475d-b521-9d88f4d72ddc" />
-
-<img width="770" alt="image" src="https://github.com/user-attachments/assets/a278688d-718a-46be-b088-d63e067b979b" />
-
-#### Fix: Plant culling
-
-A considerably large simulation of unculled flowers can be significantly slow.  A bounding sphere is computed per species on the CPU, then stored in two parameters (bounding center and radius), scaled per plant by its size.  A frustum test is run against six planes from the viewProj matrix rows, using [Gribb-Hartmann's method for extracting view-frustum planes](https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf).  A screen size test is run using the projected radius; plants under 1 pixel are culled, and between 1-4 pixels, they are shrunk using a fade factor, so there is no abrupt visual culling behavior.
-
-The above describes the whole-flower culling method.  There is an additional per-part culling method, partVisible, that drops a plant part when its on-screen size falls below a per-part size threshold.  Leaves: 3 px, petals: 1.5 px, center: 1 px, and the stem is culled only if the entire flower must be culled.  This improves rasterization and per-pixel work, whereas whole flower culling addresses improved vertex work.
-
-A freeze-culling tool is toggleable as a debug option to help visualize with and without culling.
-
-<img width="1061" height="575" alt="image" src="https://github.com/user-attachments/assets/08319c3f-c99c-409f-b632-e4996cc185f2" />
-
 #### Where species grow on the eroded terrain
 
 The `habitat` view colors every cell by the species that fits it best, occupied or not, next to the `species` view of where plants are.
@@ -296,6 +276,28 @@ Raising the erosion `time step (dt)` covered the ground in a dotted texture. The
 #### Fix: flooded plants
 
 Plants are placed once and erosion keeps moving the coast, so with `play` off some ended up standing in the sea. The compact pass now skips a plant when the ground under it is at or below the water level, so it is not drawn. The simulation still holds it, and it dies at the normal rate once `play` is on. At 400k steps with `play` off, 3,284 of 11,070 plants were in flooded cells.
+
+### Lilian: parametric tuning, lifecycle animations, optimization, and shading
+
+#### Flower Shading
+
+Flowers are now subjected to a per-part shader that more rigorously colors each petal, with slight transmission to help the effect of petal thinness, gradient coloration across each petal, sin-based petal veining, ambient and fog lighting, and health-based translucency.  An array of parameters affect the shading of each flower; translucency lessens as a petal wilts, simulating flower dryness as it approaches death.  Transmissive light is stronger at thin edges and when facing the sun, tinted by albedo for saturation.
+
+The vertex shader is improved to modify each species' FlowerParams locally, as the wilt parameter goes from 0 to 1.  The stem bends further, and the head frame follows (center and petals); the petals droop below the horizontal and each petal will randomly drop, seeded by plant rotation.  This is because the instance index changes order per frame.  Brown wilting and size shrinking is applied to a flower as it approaches death.  VSOut carries patch uv information, part type, a per-petal variation value (for petal jittering), and wilt value to the fragment shader.
+
+<img width="770" alt="image" src="https://github.com/user-attachments/assets/89a83320-24ce-475d-b521-9d88f4d72ddc" />
+
+<img width="770" alt="image" src="https://github.com/user-attachments/assets/a278688d-718a-46be-b088-d63e067b979b" />
+
+#### Fix: Plant culling
+
+A considerably large simulation of unculled flowers can be significantly slow.  A bounding sphere is computed per species on the CPU, then stored in two parameters (bounding center and radius), scaled per plant by its size.  A frustum test is run against six planes from the viewProj matrix rows, using [Gribb-Hartmann's method for extracting view-frustum planes](https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf).  A screen size test is run using the projected radius; plants under 1 pixel are culled, and between 1-4 pixels, they are shrunk using a fade factor, so there is no abrupt visual culling behavior.
+
+The above describes the whole-flower culling method.  There is an additional per-part culling method, partVisible, that drops a plant part when its on-screen size falls below a per-part size threshold.  Leaves: 3 px, petals: 1.5 px, center: 1 px, and the stem is culled only if the entire flower must be culled.  This improves rasterization and per-pixel work, whereas whole flower culling addresses improved vertex work.
+
+A freeze-culling tool is toggleable as a debug option to help visualize with and without culling.
+
+<img width="1061" height="575" alt="image" src="https://github.com/user-attachments/assets/08319c3f-c99c-409f-b632-e4996cc185f2" />
 
 ## Shared layout
 
