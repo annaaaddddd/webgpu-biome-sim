@@ -279,9 +279,19 @@ Plants are placed once and erosion keeps moving the coast, so with `play` off so
 
 ### Lilian: parametric tuning, lifecycle animations, optimization, and shading
 
-#### Flower Shading
+#### Plant lifecycle animation
+
+Smooth motion is done between animation steps. Growth, opening and wilt are evaluated using plant age and a step phase through the plant’s life cycle, so they move every frame instead of jumping each step.  Each plant instance now possesses position, species, rotation, size, petal openness, and wilt.  The size combines growth, viability, wilt shrinking, and cull fading parameters.
+
+#### Flower shading
 
 Flowers are now subjected to a per-part shader that more rigorously colors each petal, with slight transmission to help the effect of petal thinness, gradient coloration across each petal, sin-based petal veining, ambient and fog lighting, and health-based translucency.  An array of parameters affect the shading of each flower; translucency lessens as a petal wilts, simulating flower dryness as it approaches death.  Transmissive light is stronger at thin edges and when facing the sun, tinted by albedo for saturation.
+
+<img width="776" height="564" alt="Screenshot 2026-11-18 125900" src="https://github.com/user-attachments/assets/73ee6944-7a7b-4cf9-9e43-84cdc9abd2e8" />
+
+<img width="911" height="589" alt="Screenshot 2026-11-18 125824" src="https://github.com/user-attachments/assets/faf31f3c-764d-4e8e-8fae-ba5511ca6982" />
+
+#### Wilting and browning
 
 The vertex shader is improved to modify each species' FlowerParams locally, as the wilt parameter goes from 0 to 1.  The stem bends further, and the head frame follows (center and petals); the petals droop below the horizontal and each petal will randomly drop, seeded by plant rotation.  This is because the instance index changes order per frame.  Brown wilting and size shrinking is applied to a flower as it approaches death.  VSOut carries patch uv information, part type, a per-petal variation value (for petal jittering), and wilt value to the fragment shader.
 
@@ -298,6 +308,14 @@ The above describes the whole-flower culling method.  There is an additional per
 A freeze-culling tool is toggleable as a debug option to help visualize with and without culling.
 
 <img width="1061" height="575" alt="image" src="https://github.com/user-attachments/assets/08319c3f-c99c-409f-b632-e4996cc185f2" />
+
+#### Fix: Plant head frame rotation
+
+Originally, petals did not follow stem orientation.  This has since been corrected by adding stem-tip rotation offset using the stem spine function, which is applied to the petal and center positions.  Plants are no longer flat and uniform.
+
+<img width="905" height="560" alt="Screenshot 2026-11-18 132124" src="https://github.com/user-attachments/assets/10751550-386b-4660-bc9c-5579a4d694fc" />
+
+<img width="965" height="560" alt="Screenshot 2026-11-18 132257" src="https://github.com/user-attachments/assets/6e376071-13cd-4f86-8661-d45c8baa723f" />
 
 ## Shared layout
 
